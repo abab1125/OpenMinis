@@ -45,6 +45,10 @@ jobs:
           export ANDROID_NDK_HOME=$ANDROID_HOME/ndk/28.0.12433566
           bash build_proot.sh
 
+      - name: Download Alpine rootfs
+        working-directory: ${{ github.workspace }}
+        run: bash scripts/prepare_android_sandbox.sh
+
       - name: Grant gradlew execute permission
         run: chmod +x gradlew
 
