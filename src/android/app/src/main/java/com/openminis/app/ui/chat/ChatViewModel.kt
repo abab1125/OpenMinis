@@ -84,6 +84,7 @@ import java.io.ByteArrayOutputStream
 
 class ChatViewModel(
     internal val sessionId: String,
+    internal val bookId: String? = null,
     private val chatRepository: ChatRepository,
     private val providerRepository: ProviderRepository,
     internal val context: Context,
@@ -293,6 +294,7 @@ class ChatViewModel(
          */
         fun factory(
             sessionId: String,
+            bookId: String? = null,
             chatRepository: ChatRepository,
             providerRepository: ProviderRepository,
             appContext: Context,
@@ -304,6 +306,7 @@ class ChatViewModel(
             override fun <T : ViewModel> create(modelClass: Class<T>): T {
                 return ChatViewModel(
                     sessionId = sessionId,
+                    bookId = bookId,
                     chatRepository = chatRepository,
                     providerRepository = providerRepository,
                     context = appContext,
@@ -741,7 +744,12 @@ class ChatViewModel(
      * fixed list of definition objects, no I/O.
      */
     private val agentTools: List<AgentToolDefinition>
-        get() = AgentTools.makeAgentTools(memoryEnabled = _memoryEnabled.value)
+        get() = buildList {
+            addAll(AgentTools.makeAgentTools(memoryEnabled = _memoryEnabled.value))
+            if (bookId != null) {
+                addAll(com.openminis.app.tools.BookTools.definitions(bookId))
+            }
+        }
 
     /**
      * Per-session loop detector. Reset alongside [agentHistory] whenever the
@@ -7148,7 +7156,18 @@ class ChatViewModel(
             "browser_use" -> executeBrowserUseTool(argsJson)
             "memory_write" -> executeMemoryWriteTool(argsJson)
             "memory_get" -> executeMemoryGetTool(argsJson)
-            else -> ToolExecutionResult("Unknown tool: $name", false)
+            else -> {
+                // Try book tools if a book session is active
+                if (bookId != null) {
+                    val bookResult = com.openminis.app.tools.BookTools.execute(
+                        name, argsJson, bookId, activeSessionId, context
+                    )
+                    if (bookResult != null) bookResult
+                    else ToolExecutionResult("Unknown tool: $name", false)
+                } else {
+                    ToolExecutionResult("Unknown tool: $name", false)
+                }
+            }
         }
     }
 
@@ -8121,6 +8140,41 @@ Scheduled tasks: crontab / at / nohup loops will stop when the app is suspended,
             if (dailyMemoryFragment != null) {
                 append("\n\n")
                 append(dailyMemoryFragment)
+            }
+            // ── Book context injection ──
+            val activeBookId = bookId
+            if (activeBookId != null) {
+                try {
+                    val book = com.openminis.app.data.repository.BookRepository.loadBook(activeBookId, context)
+                    if (book != null) {
+                        append("\n\n--- Book Context ---\n")
+                        append("Current book: ${book.title}")
+                        if (book.genre.isNotBlank()) append(" (${book.genre})")
+                        append("\n")
+                        append("Chapters: ${book.currentChapter} | Total: ${book.totalWords} characters\n")
+                        append("Project directory: /var/minis/books/$activeBookId/\n")
+                        append("\n")
+                        append("You have the following book-specific tools available:\n")
+                        append("- book_list_chapters: list all chapters\n")
+                        append("- book_read_chapter(num): read a chapter\n")
+                        append("- book_write_chapter(num, title?, content, append?): write a chapter\n")
+                        append("- book_edit_chapter(num, find, replace, replaceAll?): edit a chapter\n")
+                        append("- book_read_outline / book_write_outline: manage outline\n")
+                        append("- book_reference(type, op, name?, content?): manage characters/worldview/notes\n")
+                        append("- book_get_context(chapterNum?): build writing context (previous chapters + list)\n")
+                        append("- book_search(query): search across chapters\n")
+                        append("- book_load_skill(name): load a writing skill\n")
+                        append("\n")
+                        append("Writing workflow:\n")
+                        append("1. book_get_context → understand current state\n")
+                        append("2. book_read_outline → review planned structure\n")
+                        append("3. book_write_chapter → create new content\n")
+                        append("4. book_read_chapter → verify continuity\n")
+                        append("5. book_load_skill(\"novel-writing\") → load novel-writing methodology\n")
+                    }
+                } catch (_: Exception) {
+                    // Book context injection failed silently
+                }
             }
             // Runtime context goes last so the prefix above stays byte-stable
             // across requests within the same day. Keep ordering deterministic

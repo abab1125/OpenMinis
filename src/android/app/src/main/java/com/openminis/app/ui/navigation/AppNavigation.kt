@@ -144,6 +144,14 @@ object Routes {
     const val MEMORY = "memory"
     /** [T-mcp-integration-android] MCP Integrations management screen. */
     const val MCP = "mcp"
+    // ── Bookshelf (novel writing) ──
+    const val BOOKSHELF = "bookshelf"
+    const val BOOK_DETAIL = "book/{bookId}"
+    const val CHAPTER_READER = "book/{bookId}/chapter/{chapterNum}"
+    const val BOOK_CHAT = "book/{bookId}/chat"
+    fun bookDetail(bookId: String) = "book/$bookId"
+    fun chapterReader(bookId: String, chapterNum: Int) = "book/$bookId/chapter/$chapterNum"
+    fun bookChat(bookId: String) = "book/$bookId/chat"
     /** [T-soul-md] SOUL.md editor. */
     const val SOUL = "soul"
     const val MEMORY_FILE_EDIT = "memory_file/{fileName}/{isGlobal}"
@@ -514,6 +522,9 @@ fun AppNavigation(
                 onScheduledTasksClick = {
                     navController.safeNavigate(Routes.SCHEDULED_TASKS)
                 },
+                onBookshelfClick = {
+                    navController.safeNavigate(Routes.BOOKSHELF)
+                },
             )
         }
 
@@ -559,6 +570,94 @@ fun AppNavigation(
                 onBrowseChatFiles = {
                     navController.safeNavigate(Routes.chatFiles(sessionId))
                 },
+                onPreviewAttachment = { item ->
+                    FilePreviewHolder.currentItem = item
+                    navController.safeNavigate(Routes.FILE_PREVIEW)
+                },
+                onModelGroupsClick = { navController.safeNavigate(Routes.MODEL_GROUPS) },
+            )
+        }
+
+        // ── Bookshelf routes ──
+        composable(Routes.BOOKSHELF) {
+            com.openminis.app.ui.bookshelf.BookshelfScreen(
+                onBookClick = { bookId ->
+                    navController.safeNavigate(Routes.bookDetail(bookId))
+                },
+                onBack = { navController.safePopBackStack() },
+            )
+        }
+
+        composable(
+            route = Routes.BOOK_DETAIL,
+            arguments = listOf(navArgument("bookId") { type = NavType.StringType }),
+        ) { backStackEntry ->
+            val bookId = backStackEntry.arguments?.getString("bookId") ?: return@composable
+            com.openminis.app.ui.bookshelf.BookDetailScreen(
+                bookId = bookId,
+                onChapterClick = { chapterNum ->
+                    navController.safeNavigate(Routes.chapterReader(bookId, chapterNum))
+                },
+                onEnterCreation = {
+                    navController.safeNavigate(Routes.bookChat(bookId))
+                },
+                onBack = { navController.safePopBackStack() },
+            )
+        }
+
+        composable(
+            route = Routes.CHAPTER_READER,
+            arguments = listOf(
+                navArgument("bookId") { type = NavType.StringType },
+                navArgument("chapterNum") { type = NavType.IntType },
+            ),
+        ) { backStackEntry ->
+            val bookId = backStackEntry.arguments?.getString("bookId") ?: return@composable
+            val chapterNum = backStackEntry.arguments?.getInt("chapterNum") ?: 1
+            com.openminis.app.ui.bookshelf.ChapterReaderScreen(
+                bookId = bookId,
+                initialChapterNum = chapterNum,
+                onBack = { navController.safePopBackStack() },
+                onEditChapter = { num ->
+                    navController.safeNavigate(Routes.bookChat(bookId))
+                },
+            )
+        }
+
+        composable(
+            route = Routes.BOOK_CHAT,
+            arguments = listOf(navArgument("bookId") { type = NavType.StringType }),
+        ) { backStackEntry ->
+            val bookId = backStackEntry.arguments?.getString("bookId") ?: return@composable
+            // Reuse ChatScreen with bookId — the ViewModel factory is extended
+            // to create or find a book-bound session.
+            ChatScreen(
+                sessionId = "__book__${bookId}",
+                bookId = bookId,
+                chatRepository = chatRepository,
+                providerRepository = providerRepository,
+                memoryRepository = memoryRepository,
+                skillRepository = skillRepository,
+                mcpRepository = mcpRepository,
+                onBack = { navController.safePopBackStack() },
+                onNewChat = {
+                    navController.safeNavigate(Routes.chat("__new__${java.util.UUID.randomUUID()}")) {
+                        popUpTo(Routes.SESSION_LIST) { inclusive = false }
+                        launchSingleTop = true
+                    }
+                },
+                onOpenTerminal = {
+                    navController.safeNavigate(Routes.terminal())
+                },
+                onOpenTerminalWithCommand = { command ->
+                    navController.safeNavigate(Routes.terminal(initCommand = command))
+                },
+                onMoveToSession = { targetId ->
+                    navController.safeNavigate(Routes.chat(targetId)) {
+                        popUpTo(Routes.SESSION_LIST) { inclusive = false }
+                    }
+                },
+                onBrowseChatFiles = {},
                 onPreviewAttachment = { item ->
                     FilePreviewHolder.currentItem = item
                     navController.safeNavigate(Routes.FILE_PREVIEW)

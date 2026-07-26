@@ -280,6 +280,7 @@ fun SessionListScreen(
     onRootfsClick: () -> Unit = {},
     // [T-android-scheduled-tasks-design] Entry to the scheduled-tasks list.
     onScheduledTasksClick: () -> Unit = {},
+    onBookshelfClick: () -> Unit = {},
 ) {
     val context = LocalContext.current
     // T46: hoist VM ownership to the NavBackStackEntry's ViewModelStore so
@@ -432,6 +433,13 @@ fun SessionListScreen(
                         // [T-android-scheduled-tasks-full] Badge shows the count of
                         // scheduled tasks so the user can see at a glance how many
                         // are configured without opening the list.
+                        // ── Bookshelf entry ──
+                        IconButton(onClick = onBookshelfClick) {
+                            Icon(
+                                Icons.Outlined.Book,
+                                contentDescription = "书架",
+                            )
+                        }
                         IconButton(onClick = onScheduledTasksClick) {
                             if (scheduledTaskCount > 0) {
                                 BadgedBox(badge = { Badge { Text("$scheduledTaskCount") } }) {

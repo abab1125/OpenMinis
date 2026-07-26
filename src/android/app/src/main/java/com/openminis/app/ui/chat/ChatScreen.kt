@@ -379,6 +379,7 @@ private data class ScrollFollowKey(
 @Composable
 fun ChatScreen(
     sessionId: String,
+    bookId: String? = null,
     chatRepository: ChatRepository,
     providerRepository: ProviderRepository,
     memoryRepository: MemoryRepository? = null,
@@ -419,6 +420,7 @@ fun ChatScreen(
         viewModelStoreOwner = ChatViewModelStore.ownerFor(sessionId),
         factory = ChatViewModel.factory(
             sessionId = sessionId,
+            bookId = bookId,
             chatRepository = chatRepository,
             providerRepository = providerRepository,
             appContext = context.applicationContext,
