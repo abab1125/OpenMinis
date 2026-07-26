@@ -49,6 +49,15 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: bash scripts/prepare_android_sandbox.sh
 
+      - name: Restore debug keystore
+        run: |
+          if [ -n "${{ secrets.DEBUG_KEYSTORE_BASE64 }}" ]; then
+            echo "${{ secrets.DEBUG_KEYSTORE_BASE64 }}" | base64 -d > $HOME/.android/debug.keystore
+            echo "Restored custom debug keystore"
+          else
+            echo "Using default debug keystore (will not be installable over previous builds)"
+          fi
+
       - name: Grant gradlew execute permission
         run: chmod +x gradlew
 

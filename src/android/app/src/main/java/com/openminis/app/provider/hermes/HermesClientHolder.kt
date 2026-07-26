@@ -15,7 +15,7 @@ private const val TAG = "HermesClientHolder"
 private const val PREFS_FILE = "hermes_gateway_prefs"
 private const val KEY_BASE_URL = "base_url"
 private const val KEY_TOKEN = "token"
-private const val DEFAULT_BASE_URL = "http://101.37.119.146/hermes"
+private const val DEFAULT_BASE_URL = "http://localhost:8642"
 
 /**
  * Process-wide singleton holding the Hermes gateway connection. OpenMinis has

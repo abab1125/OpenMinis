@@ -96,7 +96,7 @@ fun HermesGatewaySettingsScreen(onBack: () -> Unit) {
                 value = baseUrl,
                 onValueChange = { baseUrl = it; testResult = null },
                 label = { Text("Base URL") },
-                placeholder = { Text("http://101.37.119.146/hermes") },
+                placeholder = { Text("http://your-server:8642") },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
