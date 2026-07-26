@@ -49,9 +49,28 @@ jobs:
       - name: Build debug APK
         run: ./gradlew :app:assembleDebug --no-daemon
 
-      - name: Upload APK
+      - name: Upload APK to Actions artifacts
         uses: actions/upload-artifact@v4
         with:
           name: minis-debug-apk
           path: src/android/app/build/outputs/apk/debug/*.apk
           retention-days: 14
+
+      - name: Upload APK to GitHub Releases
+        uses: ncipollo/release-action@v1
+        with:
+          tag: "latest"
+          name: "最新构建 ${{ github.sha }}"
+          body: |
+            自动构建于 commit [${{ github.sha }}](https://github.com/${{ github.repository }}/commit/${{ github.sha }})
+
+            ## 书架 + 小说创作版
+            - 书架：创建/管理小说项目
+            - Agent 写作工具：`book_*` 工具集
+            - 四层写作上下文
+          artifacts: "src/android/app/build/outputs/apk/debug/*.apk"
+          allowUpdates: true
+          removeArtifacts: true
+          replacesArtifacts: true
+          makeLatest: true
+          prerelease: true
