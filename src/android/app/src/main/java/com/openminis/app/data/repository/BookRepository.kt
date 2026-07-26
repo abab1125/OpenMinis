@@ -53,10 +53,9 @@ object BookRepository {
 
     /** List all known books from the filesystem. */
     fun listBooks(context: Context): List<MiniBook> {
-        val hostRoot = PRootKernel.resolveSessionHostPath("", BOOKS_DIR, context) ?: return emptyList()
-        val dir = File(hostRoot)
-        if (!dir.isDirectory) return emptyList()
-        return (dir.listFiles()?.filter { it.isDirectory } ?: emptyList())
+        val rootDir = PRootKernel.resolveSessionHostPath("", BOOKS_DIR, context) ?: return emptyList()
+        if (!rootDir.isDirectory) return emptyList()
+        return (rootDir.listFiles()?.filter { it.isDirectory } ?: emptyList())
             .mapNotNull { f -> loadBook(f.name, context) }
             .sortedByDescending { it.updatedAt }
     }
