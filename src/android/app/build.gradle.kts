@@ -141,7 +141,7 @@ tasks.named("preBuild") { dependsOn(copyBashismRules) }
 val stageDebugSkillAssets by tasks.registering(Exec::class) {
     val script = rootProject.file("../../scripts/gen_debug_skill_android.sh")
     val skillDir = rootProject.file("../../.claude/skills/debug-server")
-    onlyIf { script.exists() }
+    onlyIf { script.exists() && skillDir.exists() }
     inputs.dir(skillDir).optional()
     inputs.file(script).optional()
     outputs.dir(layout.projectDirectory.dir("src/debug/assets/debug-skill"))
