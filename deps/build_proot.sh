@@ -325,9 +325,11 @@ install_asset() {
     # Install the unbundled loader binaries as .so files so AGP packages them
     # into nativeLibraryDir. PRootKernel.kt looks for libproot-loader.so and
     # libproot-loader32.so and sets PROOT_LOADER / PROOT_LOADER_32 env vars.
-    local unbundle_dir="$BUILD_DIR/loader-install"
-    local loader_src="$unbundle_dir/loader"
-    local loader32_src="$unbundle_dir/loader32"
+    # The loader binaries are built as deps/proot/src/loader/loader and
+    # loader/loader-m32 (build prerequisites of the `proot` target when
+    # PROOT_UNBUNDLE_LOADER is set).
+    local loader_src="$PROOT_DIR/src/loader/loader"
+    local loader32_src="$PROOT_DIR/src/loader/loader-m32"
     if [ -f "$loader_src" ]; then
         install -m 0755 "$loader_src" "$JNILIBS_DIR/libproot-loader.so"
         log_success "Installed: $JNILIBS_DIR/libproot-loader.so ($(du -h "$JNILIBS_DIR/libproot-loader.so" | awk '{print $1}'))"
