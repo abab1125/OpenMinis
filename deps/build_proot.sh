@@ -245,13 +245,23 @@ build_proot() {
 
     # proot's GNUmakefile has a quirk where `-f <path>` out-of-tree builds
     # double-prefix source paths via $(SRC)$<. Simpler to build in-tree under
-    # src/ — object files land next to sources, cleaned by `make clean`.
+    # src/ - object files land next to sources, cleaned by `make clean`.
     # Note: Makefile's default CPPFLAGS adds `-D_FILE_OFFSET_BITS=64
-    # -D_GNU_SOURCE -I. -I$(VPATH)` — we must preserve -I. since proot
+    # -D_GNU_SOURCE -I. -I$(VPATH)` - we must preserve -I. since proot
     # sources use paths like `#include "execve/elf.h"`.
     local cppflags="-D_FILE_OFFSET_BITS=64 -D_GNU_SOURCE -I. -DARG_MAX=131072 -I$TALLOC_DIR"
     local cflags="-O2 -Wall -Wextra -fPIE"
     local ldflags="-Wl,-z,noexecstack -pie -L$BUILD_DIR -ltalloc"
+
+    # Build with PROOT_UNBUNDLE_LOADER so the loader is produced as a separate
+    # binary (loader/loader and loader/loader-m32) instead of being embedded
+    # in the proot executable. The standalone loader files are then installed
+    # as libproot-loader.so / libproot-loader32.so in jniLibs so PRootKernel
+    # finds them via PROOT_LOADER / PROOT_LOADER_32 env vars at runtime.
+    # Without this, proot tries to extract the embedded loader at runtime via
+    # /proc/self/fd, which fails on some Android configurations.
+    local unbundle_dir="$BUILD_DIR/loader-install"
+    mkdir -p "$unbundle_dir"
 
     (
         cd "$PROOT_DIR/src"
@@ -267,6 +277,7 @@ build_proot() {
             CPPFLAGS="$cppflags" \
             CFLAGS="$cflags" \
             LDFLAGS="$ldflags" \
+            PROOT_UNBUNDLE_LOADER="$unbundle_dir" \
             -j"$(sysctl -n hw.ncpu 2>/dev/null || nproc)"
     )
 
@@ -306,6 +317,25 @@ install_asset() {
     mkdir -p "$JNILIBS_DIR"
     install -m 0755 "$BUILT_PROOT" "$JNILIBS_BIN"
     log_success "Installed: $JNILIBS_BIN ($(du -h "$JNILIBS_BIN" | awk '{print $1}'))"
+
+    # Install the unbundled loader binaries as .so files so AGP packages them
+    # into nativeLibraryDir. PRootKernel.kt looks for libproot-loader.so and
+    # libproot-loader32.so and sets PROOT_LOADER / PROOT_LOADER_32 env vars.
+    local unbundle_dir="$BUILD_DIR/loader-install"
+    local loader_src="$unbundle_dir/loader"
+    local loader32_src="$unbundle_dir/loader32"
+    if [ -f "$loader_src" ]; then
+        install -m 0755 "$loader_src" "$JNILIBS_DIR/libproot-loader.so"
+        log_success "Installed: $JNILIBS_DIR/libproot-loader.so ($(du -h "$JNILIBS_DIR/libproot-loader.so" | awk '{print $1}'))"
+    else
+        log_error "Loader binary not found at $loader_src. PROOT_UNBUNDLE_LOADER build failed."
+    fi
+    if [ -f "$loader32_src" ]; then
+        install -m 0755 "$loader32_src" "$JNILIBS_DIR/libproot-loader32.so"
+        log_success "Installed: $JNILIBS_DIR/libproot-loader32.so ($(du -h "$JNILIBS_DIR/libproot-loader32.so" | awk '{print $1}'))"
+    else
+        log_info "32-bit loader not built (HAS_LOADER_32BIT may be off) - skipping libproot-loader32.so"
+    fi
 }
 
 # ----------------------------------------------------------------------------
