@@ -56,11 +56,9 @@ object BookRepository {
         val hostRoot = PRootKernel.resolveSessionHostPath("", BOOKS_DIR, context) ?: return emptyList()
         val dir = File(hostRoot)
         if (!dir.isDirectory) return emptyList()
-        return dir.listFiles()
-            ?.filter { it.isDirectory }
-            ?.mapNotNull { dir -> loadBook(dir.name, context) }
-            ?.sortedByDescending { it.updatedAt }
-            ?: emptyList()
+        return (dir.listFiles()?.filter { it.isDirectory } ?: emptyList())
+            .mapNotNull { f -> loadBook(f.name, context) }
+            .sortedByDescending { it.updatedAt }
     }
 
     /** Load book metadata from book.json. Returns null if invalid. */
@@ -315,7 +313,7 @@ object BookRepository {
             val json = JSONObject(jsonFile.readText())
             val chaptersDir = resolveHostFile(bookId, "chapters", context)
             var totalWords = 0
-            chaptersDir?.listFiles()?.filter { it.name.endsWith(".md") }?.forEach { totalWords += it.length() }
+            chaptersDir?.listFiles()?.filter { it.name.endsWith(".md") }?.forEach { totalWords += it.length().toInt() }
             json.put("totalWords", totalWords)
             json.put("updatedAt", System.currentTimeMillis())
             jsonFile.writeText(json.toString(2))
