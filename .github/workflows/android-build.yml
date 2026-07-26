@@ -52,6 +52,7 @@ jobs:
       - name: Restore debug keystore
         run: |
           if [ -n "${{ secrets.DEBUG_KEYSTORE_BASE64 }}" ]; then
+            mkdir -p $HOME/.android
             echo "${{ secrets.DEBUG_KEYSTORE_BASE64 }}" | base64 -d > $HOME/.android/debug.keystore
             echo "Restored custom debug keystore"
           else
