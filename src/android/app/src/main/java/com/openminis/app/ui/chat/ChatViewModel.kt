@@ -45,6 +45,7 @@ import com.openminis.app.provider.LLMProvider
 import com.openminis.app.provider.ProviderFactory
 import com.openminis.app.provider.catalogMaxThinkingLevel
 import com.openminis.app.provider.effectiveMaxThinkingLevel
+import com.openminis.app.provider.hermes.str
 import com.openminis.app.agent.shell.BashismDetector
 import com.openminis.app.agent.shell.BashismReminder
 import com.openminis.app.agent.shell.OnDemandBash
