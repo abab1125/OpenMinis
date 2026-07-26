@@ -132,3 +132,10 @@ deps/lame-3.100/**/*.la
 deps/lame-3.100/**/*.lai
 deps/lame-3.100/**/.libs/
 deps/lame-3.100/**/.deps/
+
+# iOS (removed in fork)
+src/ios/
+deps/ish/
+deps/build_ish.sh
+deps/build_lame.sh
+deps/build_ffmpeg.sh
