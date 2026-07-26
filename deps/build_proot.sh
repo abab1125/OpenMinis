@@ -246,22 +246,17 @@ build_proot() {
     # proot's GNUmakefile has a quirk where `-f <path>` out-of-tree builds
     # double-prefix source paths via $(SRC)$<. Simpler to build in-tree under
     # src/ - object files land next to sources, cleaned by `make clean`.
-    # Note: Makefile's default CPPFLAGS adds `-D_FILE_OFFSET_BITS=64
-    # -D_GNU_SOURCE -I. -I$(VPATH)` - we must preserve -I. since proot
-    # sources use paths like `#include "execve/elf.h"`.
-    local cppflags="-D_FILE_OFFSET_BITS=64 -D_GNU_SOURCE -I. -DARG_MAX=131072 -I$TALLOC_DIR"
-    local cflags="-O2 -Wall -Wextra -fPIE"
-    local ldflags="-Wl,-z,noexecstack -pie -L$BUILD_DIR -ltalloc"
-
-    # Build with PROOT_UNBUNDLE_LOADER so the loader is produced as a separate
-    # binary (loader/loader and loader/loader-m32) instead of being embedded
-    # in the proot executable. The standalone loader files are then installed
-    # as libproot-loader.so / libproot-loader32.so in jniLibs so PRootKernel
-    # finds them via PROOT_LOADER / PROOT_LOADER_32 env vars at runtime.
-    # Without this, proot tries to extract the embedded loader at runtime via
-    # /proc/self/fd, which fails on some Android configurations.
+    #
+    # Note: passing CFLAGS=/CPPFLAGS= on the make command line overrides the
+    # file's `CFLAGS +=` / `CPPFLAGS +=`. GNUmakefile appends
+    # `-DPROOT_UNBUNDLE_LOADER="..."` via `CFLAGS +=` when PROOT_UNBUNDLE_LOADER
+    # is set - to survive the override, we manually include that -D flag here.
     local unbundle_dir="$BUILD_DIR/loader-install"
     mkdir -p "$unbundle_dir"
+
+    local cppflags="-D_FILE_OFFSET_BITS=64 -D_GNU_SOURCE -I. -DARG_MAX=131072 -I$TALLOC_DIR"
+    local cflags="-O2 -Wall -Wextra -fPIE -DPROOT_UNBUNDLE_LOADER=\"${unbundle_dir}\""
+    local ldflags="-Wl,-z,noexecstack -pie -L$BUILD_DIR -ltalloc"
 
     (
         cd "$PROOT_DIR/src"
