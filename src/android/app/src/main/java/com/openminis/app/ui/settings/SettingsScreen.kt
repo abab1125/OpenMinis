@@ -38,6 +38,7 @@ import androidx.compose.material.icons.outlined.Inventory2
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.Psychology
+import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.automirrored.outlined.Send
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Shield
@@ -104,6 +105,9 @@ fun SettingsScreen(
     // About row below still has a TODO onClick in HEAD; future settings-bucket
     // work will wire this through.
     onAboutClick: () -> Unit = {},
+    // B-hermes: Hermes gateway (mode B transparent passthrough) settings page.
+    // Default no-op so callers wired before B3 don't need retrofitting.
+    onHermesGatewayClick: () -> Unit = {},
 ) {
     val context = LocalContext.current
     var showFeedbackSheet by remember { mutableStateOf(false) }
@@ -153,6 +157,18 @@ fun SettingsScreen(
                     title = stringResource(R.string.settings_token_usage),
                     subtitle = stringResource(R.string.settings_token_usage_subtitle),
                     onClick = onUsageClick,
+                    showDivider = false,
+                )
+            }
+
+            // -- Hermes Gateway (mode B transparent passthrough) --
+            SettingsSection(title = "Hermes Gateway") {
+                SettingsItem(
+                    icon = Icons.Outlined.Public,
+                    iconColor = Color(0xFF30B0C7),
+                    title = "Hermes Gateway",
+                    subtitle = "Passthrough to the Mac-side Hermes agent",
+                    onClick = onHermesGatewayClick,
                     showDivider = false,
                 )
             }

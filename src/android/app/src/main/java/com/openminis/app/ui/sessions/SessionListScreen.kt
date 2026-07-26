@@ -71,6 +71,7 @@ import androidx.compose.material.icons.outlined.Map
 import androidx.compose.material.icons.outlined.MoreHoriz
 import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.Payments
+import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Translate
@@ -665,6 +666,12 @@ fun SessionListScreen(
                             if (sessionId != null) onNewChatGuarded(sessionId)
                         }
                     },
+                    onNewHermesSession = {
+                        scope.launch {
+                            val sessionId = viewModel.createNewSession(backend = "hermes")
+                            if (sessionId != null) onNewChatGuarded(sessionId)
+                        }
+                    },
                     modelGroups = providerConfig.modelGroups,
                     onSearchToggle = {
                         if (isSearchActive) {
@@ -768,6 +775,10 @@ private fun DualFabRow(
     hasSessions: Boolean,
     onNewChat: () -> Unit,
     onNewChatWithGroup: (String) -> Unit,
+    // B-hermes: long-press the chat FAB -> "New Hermes session". Routed through
+    // SessionListViewModel.createNewSession(backend="hermes") which encodes
+    // "__hermes__" in the draft id so ChatViewModel's runHermesTurn takes over.
+    onNewHermesSession: () -> Unit = {},
     modelGroups: List<com.openminis.app.data.model.ModelGroup>,
     onSearchToggle: () -> Unit,
     onSearchQueryChange: (String) -> Unit,
@@ -848,6 +859,19 @@ private fun DualFabRow(
                 expanded = showGroupMenu,
                 onDismissRequest = { showGroupMenu = false },
             ) {
+                // B-hermes: top entry creates a Hermes-backend session (messages
+                // transparently passthrough to the Mac-side gateway). Separated
+                // from the per-group entries by a divider so it reads as a mode
+                // switch, not another group.
+                DropdownMenuItem(
+                    text = { Text("New Hermes session") },
+                    leadingIcon = { Icon(Icons.Outlined.Public, contentDescription = null) },
+                    onClick = {
+                        showGroupMenu = false
+                        onNewHermesSession()
+                    },
+                )
+                if (topGroups.isNotEmpty()) MinisMenuDivider()
                 topGroups.forEach { group ->
                     DropdownMenuItem(
                         text = { Text(group.name) },

@@ -25,6 +25,7 @@ object BookTools {
             add(readChapterDefinition())
             add(writeChapterDefinition())
             add(editChapterDefinition())
+            add(deleteChapterDefinition())
             add(readOutlineDefinition())
             add(writeOutlineDefinition())
             add(referenceDefinition())
@@ -48,6 +49,7 @@ object BookTools {
             "book_read_chapter" -> readChapter(bookId, argsJson, context)
             "book_write_chapter" -> writeChapter(bookId, argsJson, context)
             "book_edit_chapter" -> editChapter(bookId, argsJson, context)
+            "book_delete_chapter" -> deleteChapter(bookId, argsJson, context)
             "book_read_outline" -> readOutline(bookId, context)
             "book_write_outline" -> writeOutline(bookId, argsJson, context)
             "book_reference" -> reference(bookId, argsJson, context)
@@ -119,6 +121,20 @@ object BookTools {
         ),
         required = listOf("tool_title", "num", "find", "replace"),
         propertyOrdering = listOf("tool_title", "num", "find", "replace", "replaceAll"),
+    )
+
+    private fun deleteChapterDefinition() = AgentToolDefinition(
+        name = "book_delete_chapter",
+        description = "Delete a chapter by number (1-based). The chapter file and its summary are removed. " +
+            "Subsequent chapters are NOT renumbered - chapter numbers are stable identifiers, so deleting " +
+            "ch003 leaves a gap rather than shifting ch004->ch003 (which would invalidate outline/summary refs). " +
+            "Use sparingly; for a rewrite prefer book_write_chapter with append=false.",
+        parameters = mapOf(
+            "tool_title" to toolTitle("delete_chapter"),
+            "num" to AgentToolParam("integer", "Chapter number (1-based) to delete"),
+        ),
+        required = listOf("tool_title", "num"),
+        propertyOrdering = listOf("tool_title", "num"),
     )
 
     private fun readOutlineDefinition() = AgentToolDefinition(
@@ -256,6 +272,18 @@ object BookTools {
         }
         val result = BookRepository.editChapter(bookId, num, find, replace, replaceAll, context)
         return ToolExecutionResult(result, !result.startsWith("Error"))
+    }
+
+    private fun deleteChapter(bookId: String, argsJson: String, context: Context): ToolExecutionResult {
+        val args = JSONObject(argsJson)
+        val num = args.optInt("num", 1)
+        if (num < 1) return ToolExecutionResult("Error: 'num' must be >= 1", false)
+        val deleted = BookRepository.deleteChapter(bookId, num, context)
+        return if (deleted) {
+            ToolExecutionResult("Deleted chapter $num. Subsequent chapters keep their numbers (no renumbering).", true)
+        } else {
+            ToolExecutionResult("Chapter $num not found (already absent?).", false)
+        }
     }
 
     private fun readOutline(bookId: String, context: Context): ToolExecutionResult {

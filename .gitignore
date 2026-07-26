@@ -139,3 +139,6 @@ deps/ish/
 deps/build_ish.sh
 deps/build_lame.sh
 deps/build_ffmpeg.sh
+
+# ZCode local plans
+.zcode/

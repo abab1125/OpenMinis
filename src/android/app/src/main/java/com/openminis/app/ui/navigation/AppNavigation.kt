@@ -50,6 +50,7 @@ import com.openminis.app.ui.sandbox.FileItem
 import com.openminis.app.ui.sandbox.FilePreviewScreen
 import com.openminis.app.ui.sandbox.RootfsManagementScreen
 import com.openminis.app.ui.settings.EnvironmentVariablesScreen
+import com.openminis.app.ui.settings.HermesGatewaySettingsScreen
 import com.openminis.app.ui.settings.AppearanceScreen
 import com.openminis.app.ui.settings.SettingsScreen
 import com.openminis.app.ui.settings.SystemPermissionsScreen
@@ -144,6 +145,8 @@ object Routes {
     const val MEMORY = "memory"
     /** [T-mcp-integration-android] MCP Integrations management screen. */
     const val MCP = "mcp"
+    /** B-hermes: Hermes gateway (mode B transparent passthrough) settings. */
+    const val HERMES_GATEWAY = "hermes_gateway"
     // ── Bookshelf (novel writing) ──
     const val BOOKSHELF = "bookshelf"
     const val BOOK_DETAIL = "book/{bookId}"
@@ -686,6 +689,13 @@ fun AppNavigation(
                 onAboutClick = { navController.safeNavigate(Routes.ABOUT) },
                 onMountedFoldersClick = { navController.safeNavigate(Routes.MOUNTED_FOLDERS) },
                 onSharedFoldersClick = { navController.safeNavigate(Routes.SHARED_FOLDERS) },
+                onHermesGatewayClick = { navController.safeNavigate(Routes.HERMES_GATEWAY) },
+            )
+        }
+
+        composable(Routes.HERMES_GATEWAY) {
+            HermesGatewaySettingsScreen(
+                onBack = { navController.safePopBackStack() },
             )
         }
 

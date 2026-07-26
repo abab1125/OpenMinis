@@ -39,6 +39,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.AudioFile
 import androidx.compose.material.icons.filled.FolderZip
+import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.VideoFile
 import androidx.compose.material.icons.automirrored.filled.Article
@@ -234,6 +235,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.outlined.Forum
+import androidx.compose.material.icons.outlined.MenuBook
 import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
@@ -2189,7 +2191,84 @@ fun ChatScreen(
                     }
                 },
                 actions = {
-                    // iOS: "..." circle button → dropdown menu
+                    // Novel-writing: bind a book to this session. Hidden on
+                    // Hermes-backend sessions (they don't write local novels).
+                    // Tapping lists the bookshelf inline; selecting one calls
+                    // viewModel.selectBook so BookTools light up immediately.
+                    if (!viewModel.isHermesBackend) {
+                        val activeBookId by viewModel.activeBookId.collectAsState()
+                        var showBookPicker by remember { mutableStateOf(false) }
+                        // Load the bookshelf lazily only when the picker opens,
+                        // so we don't touch the filesystem on every recompose.
+                        val books by produceState(
+                            initialValue = emptyList<com.openminis.app.data.repository.BookRepository.MiniBook>(),
+                            key1 = showBookPicker,
+                        ) {
+                            if (showBookPicker) {
+                                value = withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                    runCatching {
+                                        com.openminis.app.data.repository.BookRepository.listBooks(context)
+                                    }.getOrDefault(emptyList())
+                                }
+                            }
+                        }
+                        Box {
+                            IconButton(onClick = { showBookPicker = true }) {
+                                Icon(
+                                    if (activeBookId != null) Icons.Filled.MenuBook
+                                    else Icons.Outlined.MenuBook,
+                                    contentDescription = "Select book",
+                                )
+                            }
+                            DropdownMenu(
+                                expanded = showBookPicker,
+                                onDismissRequest = { showBookPicker = false },
+                            ) {
+                                if (activeBookId != null) {
+                                    DropdownMenuItem(
+                                        text = { Text("Unbind book") },
+                                        onClick = {
+                                            showBookPicker = false
+                                            viewModel.selectBook(null)
+                                        },
+                                        leadingIcon = { Icon(Icons.Default.Close, contentDescription = null) },
+                                    )
+                                    MinisMenuDivider()
+                                }
+                                if (books.isEmpty()) {
+                                    DropdownMenuItem(
+                                        text = { Text("No books yet — create or import one from the Bookshelf") },
+                                        onClick = { showBookPicker = false },
+                                        enabled = false,
+                                    )
+                                } else {
+                                    books.forEach { b ->
+                                        DropdownMenuItem(
+                                            text = {
+                                                Column {
+                                                    Text(b.title, fontWeight = if (b.id == activeBookId) FontWeight.Bold else FontWeight.Normal)
+                                                    Text(
+                                                        "${b.currentChapter} chapters · ${b.totalWords}字",
+                                                        style = MaterialTheme.typography.bodySmall,
+                                                    )
+                                                }
+                                            },
+                                            onClick = {
+                                                showBookPicker = false
+                                                viewModel.selectBook(b.id)
+                                            },
+                                            leadingIcon = {
+                                                if (b.id == activeBookId) {
+                                                    Icon(Icons.Default.Check, contentDescription = null)
+                                                }
+                                            },
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    // iOS: "..." circle button -> dropdown menu
                     Box {
                         IconButton(onClick = { showChatMenu = true }) {
                             Icon(Icons.Default.MoreVert, contentDescription = "More")

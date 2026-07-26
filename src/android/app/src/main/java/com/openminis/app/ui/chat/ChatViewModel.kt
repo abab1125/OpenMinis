@@ -72,6 +72,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -91,6 +92,12 @@ class ChatViewModel(
     val memoryRepository: MemoryRepository? = null,
     val skillRepository: com.openminis.app.data.repository.SkillRepository? = null,
     val mcpRepository: com.openminis.app.data.repository.MCPRepository? = null,
+    // Session backend. null = local agent loop; "hermes" = transparent Hermes
+    // gateway passthrough. Mutable so loadSession() can hydrate it from the
+    // persisted `backend` column for an existing session (a draft stays null
+    // until ensureSession writes the row). isHermesBackend / agentTools /
+    // runHermesTurn all read this live value.
+    internal var backend: String? = null,
 ) : ViewModel() {
 
     companion object {
@@ -322,6 +329,290 @@ class ChatViewModel(
 
     private val _messages = MutableStateFlow<List<ChatMessage>>(emptyList())
     val messages: StateFlow<List<ChatMessage>> = _messages.asStateFlow()
+
+    // ── Novel-writing: active book binding ─────────────────────────────
+    // The book bound to this session. Seeded from the constructor `bookId`
+    // (bookshelf entry route) and reconciled with the persisted `book_id`
+    // column in loadSession(). Mutable at runtime via [selectBook] so an
+    // ordinary chat can pick up a book mid-conversation and the agent's
+    // BookTools become available without leaving the screen. BookTools are
+    // injected iff this is non-null (see [agentTools] / [executeTool] /
+    // [buildSystemPrompt]). Hermes-backend sessions never bind a book.
+    private val _activeBookId = MutableStateFlow<String?>(bookId)
+    val activeBookId: StateFlow<String?> = _activeBookId.asStateFlow()
+
+    /** True when this session is a transparent Hermes gateway passthrough
+     *  (local agent loop bypassed; tools/skills run on the Mac). */
+    val isHermesBackend: Boolean get() = backend == "hermes"
+
+    /** Bind (or unbind with null) a book to this session. Persists to the
+     *  `book_id` column so the binding survives cold-start, and updates the
+     *  in-memory state so [agentTools] / [executeTool] / [buildSystemPrompt]
+     *  pick up the new book immediately. */
+    fun selectBook(id: String?) {
+        _activeBookId.value = id
+        val sid = realSessionId.ifEmpty { return }
+        viewModelScope.launch {
+            runCatching { chatRepository.dao.updateBookId(sid, id) }
+        }
+    }
+
+    /**
+     * book_select tool implementation: fuzzy-match a book by title (or list all
+     * when no name given) and bind it to this session. Returns the bookshelf
+     * listing / match result as text for the agent. Reads [BookRepository] on
+     * the IO dispatcher; binding happens via [selectBook] so it persists.
+     */
+    private suspend fun executeBookSelect(argsJson: String): ToolExecutionResult {
+        val name = JSONObject(argsJson).optString("name", "").trim()
+        val books = withContext(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching { com.openminis.app.data.repository.BookRepository.listBooks(context) }
+                .getOrDefault(emptyList())
+        }
+        if (books.isEmpty()) {
+            return ToolExecutionResult(
+                "No books found on the bookshelf. Create or import one from the Bookshelf screen first.",
+                true,
+            )
+        }
+        if (name.isBlank()) {
+            val sb = StringBuilder("Available books:\n")
+            books.forEach { sb.appendLine("  - ${it.title} (id=${it.id}, ${it.currentChapter} chapters, ${it.totalWords}字)") }
+            sb.appendLine("\nCall book_select with a 'name' to bind one.")
+            return ToolExecutionResult(sb.toString().trimEnd(), true)
+        }
+        // Case-insensitive substring match; prefer exact, then first contains hit.
+        val match = books.firstOrNull { it.title.equals(name, ignoreCase = true) }
+            ?: books.firstOrNull { it.title.contains(name, ignoreCase = true) }
+        return if (match != null) {
+            selectBook(match.id)
+            ToolExecutionResult(
+                "Bound book: ${match.title} (id=${match.id}). " +
+                    "Book tools are now available. Call book_list_chapters to see current progress.",
+                true,
+            )
+        } else {
+            val sb = StringBuilder("No book matched '$name'. Available:\n")
+            books.forEach { sb.appendLine("  - ${it.title}") }
+            ToolExecutionResult(sb.toString().trimEnd(), false)
+        }
+    }
+
+    /**
+     * book_create tool: create a new book project (BookRepository.createBook)
+     * and bind it to this session via [selectBook]. The bookId is derived from
+     * the title (sanitised) + a timestamp so re-creating the same title doesn't
+     * collide. Runs on IO.
+     */
+    private suspend fun executeBookCreate(argsJson: String): ToolExecutionResult {
+        val args = JSONObject(argsJson)
+        val title = args.optString("title", "").trim()
+        if (title.isBlank()) return ToolExecutionResult("Error: 'title' is required", false)
+        val genre = args.optString("genre", "").trim().ifBlank { "general" }
+        val synopsis = args.optString("synopsis", "").trim()
+        // Sanitise the title into a path-safe id; keep it readable.
+        val safe = title.filter { it.isLetterOrDigit() || it in "_-" }.ifBlank { "book" }
+        val bookId = "${safe}_${System.currentTimeMillis()}"
+        withContext(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching {
+                com.openminis.app.data.repository.BookRepository.createBook(bookId, title, genre, synopsis, context)
+            }.onFailure { return@withContext }
+        }
+        selectBook(bookId)
+        return ToolExecutionResult(
+            "Created and bound book: $title (id=$bookId, genre=$genre). " +
+                "Book tools are now available. Call book_read_outline then book_write_outline to plan, " +
+                "or book_write_chapter to start writing.",
+            true,
+        )
+    }
+
+    /**
+     * book_import tool: import a TXT file from a device-filesystem path as a
+     * new book (BookRepository.importBookFromPath), then bind it. The source
+     * must already exist on the host FS (e.g. under /var/minis/mounts/ or
+     * written via file_write) - the agent can't drive a file picker. Uses the
+     * default Chinese chapter regex unless the agent passes one.
+     */
+    private suspend fun executeBookImport(argsJson: String): ToolExecutionResult {
+        val args = JSONObject(argsJson)
+        val title = args.optString("title", "").trim()
+        val sourcePath = args.optString("source_path", "").trim()
+        if (title.isBlank()) return ToolExecutionResult("Error: 'title' is required", false)
+        if (sourcePath.isBlank()) return ToolExecutionResult("Error: 'source_path' is required", false)
+        val regex = args.optString("regex", "").trim().ifBlank {
+            com.openminis.app.data.imports.TxtTocRules.presets[com.openminis.app.data.imports.TxtTocRules.DEFAULT_INDEX].regex
+        }
+        val bookId = withContext(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching {
+                com.openminis.app.data.repository.BookRepository.importBookFromPath(
+                    title, sourcePath, regex, Charsets.UTF_8, context,
+                )
+            }.getOrNull()
+        } ?: return ToolExecutionResult(
+            "Import failed: could not read or split '$sourcePath'. Check the path is correct and the regex matches the file's chapter headings.",
+            false,
+        )
+        selectBook(bookId)
+        return ToolExecutionResult(
+            "Imported and bound book: $title (id=$bookId). Call book_list_chapters to see the imported chapters.",
+            true,
+        )
+    }
+
+    /**
+     * book_delete tool: permanently delete a book matched by title. If the
+     * deleted book is the one bound to this session, unbind via selectBook(null).
+     * Omitting 'name' lists books without deleting (safe discovery path).
+     */
+    private suspend fun executeBookDelete(argsJson: String): ToolExecutionResult {
+        val name = JSONObject(argsJson).optString("name", "").trim()
+        val books = withContext(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching { com.openminis.app.data.repository.BookRepository.listBooks(context) }
+                .getOrDefault(emptyList())
+        }
+        if (books.isEmpty()) {
+            return ToolExecutionResult("No books found on the bookshelf.", true)
+        }
+        if (name.isBlank()) {
+            val sb = StringBuilder("Available books (pass a 'name' to delete):\n")
+            books.forEach { sb.appendLine("  - ${it.title} (id=${it.id})") }
+            return ToolExecutionResult(sb.toString().trimEnd(), true)
+        }
+        val match = books.firstOrNull { it.title.equals(name, ignoreCase = true) }
+            ?: books.firstOrNull { it.title.contains(name, ignoreCase = true) }
+            ?: return ToolExecutionResult("No book matched '$name'.", false)
+        withContext(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching {
+                com.openminis.app.data.repository.BookRepository.deleteBook(match.id, context)
+            }
+        }
+        // Unbind if we just deleted the active book.
+        if (_activeBookId.value == match.id) selectBook(null)
+        return ToolExecutionResult(
+            "Deleted book: ${match.title} (id=${match.id}). This cannot be undone.",
+            true,
+        )
+    }
+
+    /**
+     * Hermes-backend turn: forward [userText] to the Mac-side Hermes gateway
+     * and render the streamed reply. Bypasses the local agent loop entirely
+     * (tools/skills/memory run on Hermes). Lifecycle:
+     *  1. ensure the WS is connected + obtain a live session handle
+     *     (create on first turn, resume afterwards - cached in [hermesHandle]).
+     *  2. insert a streaming assistant placeholder + prompt.submit.
+     *  3. collect message.* events for this session, appending deltas via
+     *     [updateAssistantMessage] (same path the local loop uses, so the
+     *     side-channel / throttling / UI all work unchanged).
+     *  4. on message.complete, seal the message + persist to the local DB
+     *     (so the reply survives a reload) and return.
+     *
+     * tool/approval/clarify events are ignored in v1 - the Hermes side should
+     * run autonomous tools. Errors surface via [_error].
+     */
+    private suspend fun runHermesTurn(activeSessionId: String, userText: String) {
+        val hermes = com.openminis.app.provider.hermes.HermesClientHolder
+        hermes.init(context)
+        if (!hermes.isConfigured()) {
+            _error.value = "Hermes 网关未配置：请在设置里填写 baseUrl 和 session token。"
+            return
+        }
+        // Connect (idempotent) and resolve a live session handle. The handle
+        // is short-lived on the gateway side; cache it per VM and resume if
+        // the connection dropped.
+        hermes.chat.connect()
+        val handle = hermesHandle?.let { runCatching { hermes.chat.resume(it) }.getOrNull() }
+            ?: hermes.chat.createSession()
+        if (handle == null) {
+            _error.value = "Hermes: 无法创建会话。"
+            return
+        }
+        hermesHandle = handle
+
+        val assistantId = "hermes_${System.currentTimeMillis()}"
+        withContext(Dispatchers.Main) {
+            _messages.value = _messages.value + ChatMessage(
+                id = assistantId,
+                role = "assistant",
+                content = "",
+                isStreaming = true,
+                isAwaitingModelResponse = true,
+            )
+        }
+
+        hermes.chat.submit(handle, userText)
+
+        // Collect events addressed to this handle until the turn completes.
+        // `collect` doesn't break on `return@collect`, so we wrap it in a
+        // coroutineScope and cancel the scope on message.complete / error to
+        // end the turn cleanly. `turnDone` distinguishes the internal
+        // (normal) cancel from an external one (user hit stop).
+        val sb = StringBuilder()
+        var turnDone = false
+        try {
+            kotlinx.coroutines.coroutineScope {
+                hermes.chat.events
+                    .filter { it.sessionId == null || it.sessionId == handle }
+                    .collect { event ->
+                        when (event.type) {
+                            "message.start" -> withContext(Dispatchers.Main) {
+                                updateAssistantMessage(assistantId, "", true, emptyList(), isAwaitingModelResponse = false)
+                            }
+                            "message.delta" -> {
+                                val delta = event.str("text") ?: ""
+                                if (delta.isNotEmpty()) {
+                                    sb.append(delta)
+                                    val snap = sb.toString()
+                                    withContext(Dispatchers.Main) {
+                                        updateAssistantMessage(assistantId, snap, true, emptyList())
+                                    }
+                                }
+                            }
+                            "message.complete" -> {
+                                // Gateway sends the full text on complete; prefer
+                                // it over our accumulated deltas in case one dropped.
+                                val finalText = event.str("text") ?: event.str("rendered") ?: sb.toString()
+                                sb.setLength(0); sb.append(finalText)
+                                withContext(Dispatchers.Main) {
+                                    updateAssistantMessage(assistantId, finalText, false, emptyList())
+                                }
+                                // Persist so the reply survives a reload.
+                                val partsJson = """[{"type":"text","value":${escapeJson(finalText)}}]"""
+                                runCatching {
+                                    chatRepository.appendMessage(activeSessionId, "assistant", partsJson)
+                                }
+                                turnDone = true
+                                this@coroutineScope.cancel() // end the turn normally
+                            }
+                            "error" -> {
+                                val msg = event.str("message") ?: "Hermes 错误"
+                                withContext(Dispatchers.Main) {
+                                    updateAssistantMessage(assistantId, msg, false, emptyList())
+                                    _error.value = "Hermes: $msg"
+                                }
+                                turnDone = true
+                                this@coroutineScope.cancel() // end the turn
+                            }
+                        }
+                    }
+            }
+        } catch (e: CancellationException) {
+            if (!turnDone) {
+                // External cancel (user hit stop) - seal whatever we have and
+                // tell the gateway to stop generating.
+                val partial = sb.toString()
+                withContext(Dispatchers.Main) {
+                    updateAssistantMessage(assistantId, partial, false, emptyList())
+                }
+                runCatching { hermes.chat.interrupt(handle) }
+            }
+            throw e
+        }
+    }
+
+    /** Cached live Hermes session handle for the current VM (resume on reconnect). */
+    private var hermesHandle: String? = null
 
     // ── Long-session window cap ────────────────────────────────────────
     //
@@ -746,10 +1037,111 @@ class ChatViewModel(
     private val agentTools: List<AgentToolDefinition>
         get() = buildList {
             addAll(AgentTools.makeAgentTools(memoryEnabled = _memoryEnabled.value))
-            if (bookId != null) {
-                addAll(com.openminis.app.tools.BookTools.definitions(bookId))
+            // Hermes-backend sessions never expose local tools - tools run on
+            // the Mac-side Hermes gateway, OpenMinis is just the UI channel.
+            if (isHermesBackend) return@buildList
+            // book_select lets the agent bind a book to this session at runtime
+            // (fuzzy-match by title). Always exposed on local sessions so an
+            // ordinary chat can enter novel-writing without leaving the screen;
+            // once bound, the BookTools below light up.
+            add(bookSelectDefinition())
+            // book_create / book_import / book_delete are also always exposed:
+            // a brand-new session has no book bound yet, but the agent should
+            // be able to start a new novel or import a TXT without asking the
+            // user to visit the Bookshelf first. book_create / book_import bind
+            // the freshly-created book; book_delete unbinds if it deleted the
+            // active one.
+            add(bookCreateDefinition())
+            add(bookImportDefinition())
+            add(bookDeleteDefinition())
+            // Novel-writing tools are injected iff a book is bound. The bound
+            // book can come from the bookshelf entry route OR be picked at
+            // runtime via selectBook() / the book_select tool, so we read the
+            // live _activeBookId rather than the constructor parameter.
+            val activeBook = _activeBookId.value
+            if (activeBook != null) {
+                addAll(com.openminis.app.tools.BookTools.definitions(activeBook))
             }
         }
+
+    private fun bookSelectDefinition(): AgentToolDefinition = AgentToolDefinition(
+        name = "book_select",
+        description = "Bind a novel to this session so the book_* writing tools become available. " +
+            "Pass a title (or substring) to fuzzy-match against the bookshelf; the matching book is bound and its context loaded. " +
+            "Call book_list_chapters afterwards to confirm. Use book_select with no name to list available books when unsure.",
+        parameters = mapOf(
+            "tool_title" to AgentToolParam(
+                "string",
+                "A concise 5-10 word summary of what this tool call does, shown to the user.",
+            ),
+            "name" to AgentToolParam(
+                "string",
+                "Book title or substring to match (case-insensitive). Omit to list all available books without binding.",
+            ),
+        ),
+        required = listOf("tool_title"),
+        propertyOrdering = listOf("tool_title", "name"),
+    )
+
+    private fun bookCreateDefinition(): AgentToolDefinition = AgentToolDefinition(
+        name = "book_create",
+        description = "Create a new novel project and bind it to this session. " +
+            "Sets up the book skeleton (outline, chapters/, characters/, etc.) and a git repo. " +
+            "After creation the book_* writing tools become available. " +
+            "Use this when the user wants to start a brand-new novel.",
+        parameters = mapOf(
+            "tool_title" to AgentToolParam(
+                "string",
+                "A concise 5-10 word summary of what this tool call does, shown to the user.",
+            ),
+            "title" to AgentToolParam("string", "Book title"),
+            "genre" to AgentToolParam("string", "Genre, e.g. 玄幻/都市/科幻/言情 (optional)"),
+            "synopsis" to AgentToolParam("string", "One-paragraph synopsis / logline (optional)"),
+        ),
+        required = listOf("tool_title", "title"),
+        propertyOrdering = listOf("tool_title", "title", "genre", "synopsis"),
+    )
+
+    private fun bookImportDefinition(): AgentToolDefinition = AgentToolDefinition(
+        name = "book_import",
+        description = "Import an existing TXT novel file as a new book project, splitting it into chapters by regex. " +
+            "The source must be a file already on the device filesystem (e.g. under /var/minis/mounts/ or written via file_write). " +
+            "Chapters are split using a chapter-heading regex; the default covers Chinese web novels (第X章/序章/楔子). " +
+            "The new book is bound to this session on success.",
+        parameters = mapOf(
+            "tool_title" to AgentToolParam(
+                "string",
+                "A concise 5-10 word summary of what this tool call does, shown to the user.",
+            ),
+            "title" to AgentToolParam("string", "Book title for the imported project"),
+            "source_path" to AgentToolParam("string", "Absolute path to the .txt file on the device filesystem"),
+            "regex" to AgentToolParam(
+                "string",
+                "Chapter-heading regex (MULTILINE, whole-line match). Omit for the default Chinese rule.",
+            ),
+        ),
+        required = listOf("tool_title", "title", "source_path"),
+        propertyOrdering = listOf("tool_title", "title", "source_path", "regex"),
+    )
+
+    private fun bookDeleteDefinition(): AgentToolDefinition = AgentToolDefinition(
+        name = "book_delete",
+        description = "Permanently delete a book project and ALL its chapters/outline/references. Irreversible. " +
+            "If the deleted book is the one bound to this session, the session is unbound afterwards. " +
+            "Pass a title (or substring) to match; omit to list available books without deleting.",
+        parameters = mapOf(
+            "tool_title" to AgentToolParam(
+                "string",
+                "A concise 5-10 word summary of what this tool call does, shown to the user.",
+            ),
+            "name" to AgentToolParam(
+                "string",
+                "Book title or substring to match (case-insensitive). Omit to list books without deleting.",
+            ),
+        ),
+        required = listOf("tool_title"),
+        propertyOrdering = listOf("tool_title", "name"),
+    )
 
     /**
      * Per-session loop detector. Reset alongside [agentHistory] whenever the
@@ -2570,6 +2962,23 @@ class ChatViewModel(
     /** Model group ID from long-press FAB, encoded in the draft session ID. */
     private val initialGroupId: String? = sessionId.substringAfter("__grp__", "").takeIf { it.isNotEmpty() }
 
+    /**
+     * Backend marker encoded in the draft session ID ("__hermes__" suffix).
+     * A Hermes-backend draft session is created with an id like
+     * `__new__<uuid>__hermes__`; we peel the suffix here so [ensureSession]
+     * persists `backend="hermes"` on first send. For existing (non-draft)
+     * sessions the persisted `backend` column wins (see loadSession).
+     */
+    private val initialBackend: String? =
+        if (sessionId.contains("__hermes__")) "hermes" else null
+
+    init {
+        // Seed backend from the draft-id encoding. loadSession() will overwrite
+        // this from the DB row for existing sessions; ensureSession() persists
+        // it on first send for drafts.
+        if (backend == null) backend = initialBackend
+    }
+
     /** The real session ID (same as sessionId for existing sessions, generated on first message for drafts). */
     internal var realSessionId: String = if (isDraft) "" else sessionId
 
@@ -2778,6 +3187,7 @@ class ChatViewModel(
         val session = chatRepository.createSession(
             modelId = modelId,
             memoryEnabled = _memoryEnabled.value,
+            backend = backend,
         )
         realSessionId = session.id
         // Move our cached VM from the draft key ("__new__...") to the real
@@ -2960,6 +3370,16 @@ class ChatViewModel(
             _sessionTitle.value = session.title ?: "New Chat"
             _sessionCategory.value = session.category
             _memoryEnabled.value = session.memoryEnabled != 0
+            // Novel-writing: prefer the persisted book_id over the constructor
+            // param when the session was rebound at runtime (selectBook writes
+            // the column). Constructor bookId still wins for bookshelf-origin
+            // drafts that haven't been persisted yet, and as a fallback if the
+            // column is somehow null on an old book session.
+            _activeBookId.value = session.bookId ?: bookId
+            // Hydrate the backend marker from the persisted row so a
+            // Hermes-backend session routes through runHermesTurn on re-entry.
+            // Drafts (no row yet) keep the constructor default (null = local).
+            backend = session.backend
             // T239: hydrate persisted thinking-mode override. null = unset
             // (use OFF as the legacy default); non-null = explicit user
             // choice persisted across cold-start. runCatching guards against
@@ -4968,6 +5388,30 @@ class ChatViewModel(
             streamLaunched = true
             streamJob = launch(Dispatchers.IO) {
                 AppLogger.info(TAG_STREAM, "send streamJob ENTER sid=$activeSessionId")
+
+                // ── Hermes backend: transparent passthrough ──
+                // Bypass the local agent loop entirely. The user's text is
+                // forwarded to the Mac-side Hermes gateway via prompt.submit;
+                // the streamed reply arrives as message.* events which
+                // runHermesTurn collects and renders through the same
+                // updateAssistantMessage path the local loop uses. No local
+                // tools / agentHistory / concurrency-slot - those live on the
+                // Hermes side. The finally block below still flips
+                // _isStreaming=false on completion.
+                if (isHermesBackend) {
+                    try {
+                        runHermesTurn(activeSessionId, trimmed)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        AppLogger.warning(TAG_STREAM, "hermes turn failed: ${e.message}")
+                        withContext(Dispatchers.Main) {
+                            _error.value = "Hermes: ${e.message ?: "connection error"}"
+                        }
+                    }
+                    return@launch
+                }
+
                 try {
                     // Acquire concurrency slot (suspends if at max)
                     SessionConcurrencyManager.acquireSlot(activeSessionId)
@@ -7125,6 +7569,10 @@ class ChatViewModel(
         val toolTitle = try { JSONObject(argsJson).optString("tool_title", name) } catch (_: Exception) { name }
 
         return when (name) {
+            "book_select" -> executeBookSelect(argsJson)
+            "book_create" -> executeBookCreate(argsJson)
+            "book_import" -> executeBookImport(argsJson)
+            "book_delete" -> executeBookDelete(argsJson)
             FileReadTool.NAME -> {
                 val result = FileReadTool.execute(argsJson, activeSessionId, context)
                 // Record skill usage when SKILL.md under /var/minis/skills/<id>/ is read.
@@ -7157,10 +7605,14 @@ class ChatViewModel(
             "memory_write" -> executeMemoryWriteTool(argsJson)
             "memory_get" -> executeMemoryGetTool(argsJson)
             else -> {
-                // Try book tools if a book session is active
-                if (bookId != null) {
+                // Try book tools if a book is bound to this session. Reads
+                // the live _activeBookId (runtime-selectable) rather than the
+                // constructor param, so an ordinary chat that picked up a
+                // book via selectBook() / book_select also dispatches here.
+                val activeBook = _activeBookId.value
+                if (activeBook != null && !isHermesBackend) {
                     val bookResult = com.openminis.app.tools.BookTools.execute(
-                        name, argsJson, bookId, activeSessionId, context
+                        name, argsJson, activeBook, activeSessionId, context
                     )
                     if (bookResult != null) bookResult
                     else ToolExecutionResult("Unknown tool: $name", false)
@@ -8142,7 +8594,11 @@ Scheduled tasks: crontab / at / nohup loops will stop when the app is suspended,
                 append(dailyMemoryFragment)
             }
             // ── Book context injection ──
-            val activeBookId = bookId
+            // Reads the live _activeBookId so a book bound at runtime (via
+            // selectBook / book_select) injects its context just like a
+            // bookshelf-originated session. Skipped for Hermes-backend sessions
+            // (they don't write local novels).
+            val activeBookId = if (isHermesBackend) null else _activeBookId.value
             if (activeBookId != null) {
                 try {
                     val book = com.openminis.app.data.repository.BookRepository.loadBook(activeBookId, context)

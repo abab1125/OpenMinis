@@ -25,4 +25,12 @@ data class ChatSessionEntity(
     // ("OFF"/"LOW"/"MEDIUM"/"HIGH"/"XHIGH") and represents an explicit user
     // choice that survives cold-start.
     @ColumnInfo(name = "thinking_override") val thinkingOverride: String? = null,
+    // Novel-writing: which book is bound to this session. null = no book.
+    // Set either by entering chat from the bookshelf (Routes.bookChat) or by
+    // the user/agent selecting a book mid-session (ChatViewModel.selectBook).
+    @ColumnInfo(name = "book_id") val bookId: String? = null,
+    // Session backend. null = local agent loop (LLMProvider + local tools).
+    // "hermes" = transparent passthrough to a remote Hermes gateway
+    // (prompt.submit over WebSocket, local agent loop bypassed).
+    @ColumnInfo(name = "backend") val backend: String? = null,
 )

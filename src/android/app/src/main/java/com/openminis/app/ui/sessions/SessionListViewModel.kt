@@ -501,11 +501,16 @@ class SessionListViewModel(
     /**
      * Create a draft session ID for navigation. The actual DB record is created
      * only when the user sends the first message (deferred creation, matching iOS).
+     *
+     * [backend] optionally encodes a non-local backend in the draft id
+     * ("hermes" -> "__hermes__" suffix) so ChatViewModel routes the session
+     * through the Hermes gateway passthrough. null (default) = local loop.
      */
-    fun createNewSession(groupId: String? = null): String? {
+    fun createNewSession(groupId: String? = null, backend: String? = null): String? {
         if (providerRepository.allVisibleEntries().isEmpty()) return null
         val base = "__new__${java.util.UUID.randomUUID()}"
-        return if (groupId != null) "${base}__grp__${groupId}" else base
+        val withGroup = if (groupId != null) "${base}__grp__${groupId}" else base
+        return if (backend == "hermes") "${withGroup}__hermes__" else withGroup
     }
 
     /**

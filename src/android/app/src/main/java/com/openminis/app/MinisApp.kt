@@ -292,6 +292,11 @@ class MinisApp : Application(), ImageLoaderFactory {
         memoryRepository = MemoryRepository(java.io.File(filesDir, "minis-global/memory"))
         webAppShortcutRepository = WebAppShortcutRepository(database.webAppShortcutDao())
 
+        // B-hermes: prime the Hermes gateway client holder with the app
+        // context so its lazy OkHttp / WS client can be built on demand by
+        // any Hermes-backend session. Reads config from encrypted prefs.
+        com.openminis.app.provider.hermes.HermesClientHolder.init(this)
+
         // [T-soul-md] Seed SOUL.md with the default content on first launch
         // so the Soul settings page and chat bubble identity have a real
         // file to read. Safe no-op on subsequent launches — never

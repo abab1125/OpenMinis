@@ -20,6 +20,10 @@ class ChatRepository(internal val dao: ChatDao) {
         // here; existing call sites that omit it keep the prior
         // memoryEnabled=1 behavior (legacy default).
         memoryEnabled: Boolean = true,
+        // null = local agent loop (default); "hermes" = transparent Hermes
+        // gateway passthrough. New sessions default to local; the UI flips
+        // this when the user picks the Hermes backend.
+        backend: String? = null,
     ): ChatSessionEntity {
         val now = System.currentTimeMillis()
         val session = ChatSessionEntity(
@@ -29,6 +33,7 @@ class ChatRepository(internal val dao: ChatDao) {
             createdAt = now,
             updatedAt = now,
             memoryEnabled = if (memoryEnabled) 1 else 0,
+            backend = backend,
         )
         dao.insertSession(session)
         return session

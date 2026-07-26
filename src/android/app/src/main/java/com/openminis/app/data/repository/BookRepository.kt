@@ -143,6 +143,120 @@ object BookRepository {
         hostRoot.deleteRecursively()
     }
 
+    /**
+     * Delete a single chapter file by number (1-based). Does NOT renumber
+     * subsequent chapters - chapter numbers are stable identifiers, so
+     * deleting ch003 leaves a gap rather than shifting ch004->ch003 (which
+     * would silently invalidate any outline / summary references). The
+     * summary file (if any) is also removed. Returns true on success.
+     */
+    fun deleteChapter(bookId: String, num: Int, context: Context): Boolean {
+        val f = chapterFile(bookId, num, context) ?: return false
+        val existed = f.delete()
+        // Drop the matching summary too so listChapters' hasSummary flag stays honest.
+        runCatching { summaryFile(bookId, num, context).delete() }
+        if (existed) refreshBookMeta(bookId, context)
+        return existed
+    }
+
+    /**
+     * Agent-friendly import: split a TXT file already on the host filesystem
+     * (resolved via the book-id host dir, so a path under /var/minis/... works)
+     * into chapters under a new book project. Mirrors [importBook] but takes a
+     * host [sourcePath] instead of a content:// Uri - the agent can't drive a
+     * file picker, so it points at a file the user already placed (e.g. via
+     * file_write or a mounted folder).
+     *
+     * @return the new bookId, or null on failure.
+     */
+    fun importBookFromPath(
+        title: String,
+        sourcePath: String,
+        regex: String,
+        charset: java.nio.charset.Charset,
+        context: Context,
+        progress: ((written: Int, total: Int) -> Unit)? = null,
+    ): String? {
+        val src = File(sourcePath)
+        if (!src.isFile) return null
+        val chapters = try {
+            src.inputStream().use { input ->
+                com.openminis.app.data.imports.TxtChapterSplitter.split(input, regex, charset)
+            }
+        } catch (_: Exception) {
+            return null
+        }
+        if (chapters.isEmpty()) return null
+
+        val bookId = "import_${System.currentTimeMillis()}"
+        createBook(bookId, title, "imported", "Imported from $sourcePath.", context)
+        chapters.forEachIndexed { idx, ch ->
+            val num = idx + 1
+            val f = chapterFile(bookId, num, context) ?: return@forEachIndexed
+            f.writeText("# ${ch.title}\n\n${ch.content}")
+            progress?.invoke(idx + 1, chapters.size)
+        }
+        refreshBookMeta(bookId, context)
+        return bookId
+    }
+
+    /**
+     * Import a TXT file as a new book, splitting it into chapters with a
+     * regex (ported from legado's TextFile.analyze). The file is read via
+     * ContentResolver, split in-memory by [TxtChapterSplitter], then each
+     * chapter is written to `chapters/ch{NNN}.md` (first line `# {title}`)
+     * under a freshly-created book project. [progress] is invoked with the
+     * number of chapters written so far (for UI progress).
+     *
+     * @return the new bookId, or null on failure (no read access / IO error).
+     */
+    fun importBook(
+        title: String,
+        sourceUri: android.net.Uri,
+        regex: String,
+        charset: java.nio.charset.Charset,
+        context: Context,
+        progress: ((written: Int, total: Int) -> Unit)? = null,
+    ): String? {
+        val bookId = "import_${System.currentTimeMillis()}"
+        // Read & split the source first - if this fails we don't leave a
+        // half-created book directory behind.
+        val chapters = try {
+            context.contentResolver.openInputStream(sourceUri)?.use { input ->
+                com.openminis.app.data.imports.TxtChapterSplitter.split(input, regex, charset)
+            } ?: return null
+        } catch (_: Exception) {
+            return null
+        }
+        if (chapters.isEmpty()) return null
+
+        // Create the book skeleton (directories, book.json, outline, git).
+        createBook(bookId, title, "imported", "Imported from TXT.", context)
+
+        // Write each chapter. Match the existing ch{NNN}.md convention and
+        // the "# Title" heading that listChapters / writeChapter expect.
+        chapters.forEachIndexed { idx, ch ->
+            val num = idx + 1
+            val f = chapterFile(bookId, num, context) ?: return@forEachIndexed
+            val heading = "# ${ch.title}\n\n"
+            f.writeText(heading + ch.content)
+            progress?.invoke(idx + 1, chapters.size)
+        }
+        refreshBookMeta(bookId, context)
+
+        // Commit to git so the imported state is recoverable.
+        val hostRoot = resolveHostDir(bookId, context)
+        if (hostRoot != null) {
+            try {
+                Runtime.getRuntime().exec(arrayOf("git", "add", "-A"), null, hostRoot).waitFor()
+                Runtime.getRuntime()
+                    .exec(arrayOf("git", "commit", "-m", "Import ${chapters.size} chapters"), null, hostRoot)
+                    .waitFor()
+            } catch (_: Exception) {}
+        }
+        return bookId
+    }
+
     // ── Chapter operations ─────────────────────────────────────────────
 
     fun listChapters(bookId: String, context: Context): List<BookChapter> {

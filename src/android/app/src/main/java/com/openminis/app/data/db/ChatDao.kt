@@ -188,6 +188,14 @@ interface ChatDao {
     @Query("UPDATE sessions SET source = :source WHERE id = :id")
     suspend fun updateSource(id: String, source: String?)
 
+    // Session: bound book (novel-writing). null clears the binding.
+    @Query("UPDATE sessions SET book_id = :bookId, updated_at = :updatedAt WHERE id = :id")
+    suspend fun updateBookId(id: String, bookId: String?, updatedAt: Long = System.currentTimeMillis())
+
+    // Session: backend ("hermes" = remote gateway passthrough, null = local agent loop).
+    @Query("UPDATE sessions SET backend = :backend WHERE id = :id")
+    suspend fun updateBackend(id: String, backend: String?)
+
     // Messages: increment stream_interrupt_count
     @Query("UPDATE messages SET stream_interrupt_count = stream_interrupt_count + 1, updated_at = :updatedAt WHERE id = :id")
     suspend fun incrementStreamInterruptCount(id: String, updatedAt: Long = System.currentTimeMillis())
