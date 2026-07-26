@@ -255,7 +255,10 @@ build_proot() {
     mkdir -p "$unbundle_dir"
 
     local cppflags="-D_FILE_OFFSET_BITS=64 -D_GNU_SOURCE -I. -DARG_MAX=131072 -I$TALLOC_DIR"
-    local cflags="-O2 -Wall -Wextra -fPIE -DPROOT_UNBUNDLE_LOADER=\"${unbundle_dir}\""
+    # -DPROOT_UNBUNDLE_LOADER needs escaped quotes so the C macro expands to
+    # a string literal (enter.c does: PROOT_UNBUNDLE_LOADER "/loader32").
+    # GNUmakefile does the same via: CFLAGS += "-DPROOT_UNBUNDLE_LOADER=\"$(PROOT_UNBUNDLE_LOADER)\""
+    local cflags='-O2 -Wall -Wextra -fPIE -DPROOT_UNBUNDLE_LOADER="'"${unbundle_dir}"'"'
     local ldflags="-Wl,-z,noexecstack -pie -L$BUILD_DIR -ltalloc"
 
     (
