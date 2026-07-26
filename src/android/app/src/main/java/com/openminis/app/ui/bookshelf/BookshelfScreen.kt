@@ -401,7 +401,11 @@ private fun ImportBookDialog(
     var rulesExpanded by remember { mutableStateOf(false) }
     var charsetExpanded by remember { mutableStateOf(false) }
 
-    val charsets = listOf(Charsets.UTF_8 to "UTF-8", Charsets.GBK to "GBK", Charsets.ISO_8859_1 to "ISO-8859-1")
+    val charsets: List<Pair<java.nio.charset.Charset, String>> = listOf(
+        Charsets.UTF_8 to "UTF-8",
+        java.nio.charset.Charset.forName("GBK") to "GBK",
+        Charsets.ISO_8859_1 to "ISO-8859-1",
+    )
     val currentRule = TxtTocRules.presets[ruleIndex]
     val currentCharset = charsets[charsetIndex].first
 

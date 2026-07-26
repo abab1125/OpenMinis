@@ -31,7 +31,9 @@ data class ServerEvent(
 // Defensive payload readers - structured JSON (e.g. tool results) must never
 // throw here, or the uncaught exception escapes the event collector and kills
 // the stream mid-turn. Mirror upstream's str/bool/strList helpers.
-internal fun ServerEvent.str(key: String): String? = when (val el = payload[key]) {
+// `str` is public because ChatViewModel (ui.chat package) reads message deltas
+// via event.str("text"); the rest stay internal (only the hermes package uses them).
+fun ServerEvent.str(key: String): String? = when (val el = payload[key]) {
     null, JsonNull -> null
     is JsonPrimitive -> el.content
     else -> el.toString()

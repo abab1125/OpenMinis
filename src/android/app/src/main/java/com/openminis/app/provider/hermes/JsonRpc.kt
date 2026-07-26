@@ -51,6 +51,3 @@ fun parseInbound(json: Json, line: String): RpcInbound {
     }
     return RpcResult(id, obj["result"] ?: JsonPrimitive("null"))
 }
-
-private fun JsonObject.objOrEmpty(key: String): JsonObject =
-    (this[key] as? JsonObject) ?: JsonObject(emptyMap())
