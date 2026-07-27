@@ -13,13 +13,15 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         MessageEntity::class,
         CompactMarkerEntity::class,
         WebAppShortcutEntity::class,
+        BookSourceEntity::class,
     ],
-    version = 11,
+    version = 12,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun chatDao(): ChatDao
     abstract fun webAppShortcutDao(): WebAppShortcutDao
+    abstract fun bookSourceDao(): BookSourceDao
 
     companion object {
         @Volatile
@@ -177,6 +179,34 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * Book sources: a new `book_sources` table backs the legado-format
+         * source import (e.g. lingya). Pure additive — no existing entity is
+         * touched. Sources are independent from the file-based novel projects.
+         */
+        val MIGRATION_11_12 = object : Migration(11, 12) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS book_sources (
+                        bookSourceUrl TEXT NOT NULL PRIMARY KEY,
+                        bookSourceName TEXT NOT NULL,
+                        bookSourceGroup TEXT,
+                        enabledExplore INTEGER NOT NULL DEFAULT 1,
+                        exploreUrl TEXT NOT NULL,
+                        ruleExploreJson TEXT NOT NULL,
+                        ruleSearchJson TEXT,
+                        ruleBookInfoJson TEXT,
+                        ruleTocJson TEXT,
+                        ruleContentJson TEXT,
+                        header TEXT,
+                        lastUpdateTime INTEGER NOT NULL DEFAULT 0
+                    )
+                    """.trimIndent()
+                )
+            }
+        }
+
         val MIGRATION_3_4 = object : Migration(3, 4) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 // sessions: add iOS-parity columns
@@ -214,7 +244,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "minis.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12)
                     .build()
                     .also { INSTANCE = it }
             }
