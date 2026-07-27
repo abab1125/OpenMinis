@@ -33,21 +33,26 @@ PROOT_DEB_URL="https://packages.termux.dev/apt/termux-main/pool/main/p/proot/pro
 
 # download_cached <url> <cache-filename> [verify-command]
 #   Downloads to $CACHE_DIR if missing, runs optional verify command on the
-#   cached file (must exit non-zero on corruption), echoes the cached path.
+#   cached file (must exit non-zero on corruption), echoes the cached PATH.
 #   On verification failure it re-downloads once before giving up.
+#   NOTE: status messages go to stderr and verify output is discarded, so the
+#   only thing printed to stdout is the path (safe for command substitution).
 download_cached() {
   local url="$1" name="$2" verify="${3:-}"
   local cached="$CACHE_DIR/$name"
-  if [ -f "$cached" ] && { [ -z "$verify" ] || eval "$verify \"$cached\""; }; then
-    echo "✓ cached download present: $name"
+  if [ -f "$cached" ] && { [ -z "$verify" ] || eval "$verify \"$cached\"" >/dev/null 2>&1; }; then
+    echo "✓ cached download present: $name" >&2
   else
-    echo "Downloading $url ..."
+    echo "Downloading $url ..." >&2
     curl -fSL -o "$cached" "$url"
-    if [ -n "$verify" ] && ! eval "$verify \"$cached\""; then
-      echo "Downloaded file failed verification, retrying once..."
+    if [ -n "$verify" ] && ! eval "$verify \"$cached\"" >/dev/null 2>&1; then
+      echo "Downloaded file failed verification, retrying once..." >&2
       rm -f "$cached"
       curl -fSL -o "$cached" "$url"
-      eval "$verify \"$cached\""
+      if ! eval "$verify \"$cached\"" >/dev/null 2>&1; then
+        echo "Error: $name still fails verification after retry" >&2
+        exit 1
+      fi
     fi
   fi
   echo "$cached"
