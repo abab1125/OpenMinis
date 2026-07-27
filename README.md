@@ -1,7 +1,7 @@
 # OpenMinis
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
-[![Platforms](https://img.shields.io/badge/Platforms-iOS%20%7C%20Android-lightgrey.svg)](#beta-programme)
+[![Platforms](https://img.shields.io/badge/Platforms-Android-lightgrey.svg)](#beta-programme)
 
 **Your private, on-device AI agent.**
 
@@ -19,10 +19,6 @@ what converge on the product.**
 
 Official website: **[openminis.app](https://openminis.app)**
 
-<a href="https://apps.apple.com/app/id6759188481">
-  <img alt="Download on the App Store" height="48" src="assets/badge-appstore.svg" />
-</a>
-&nbsp;
 <a href="https://github.com/OpenMinis/OpenMinis/releases">
   <img alt="Get the APK on GitHub" height="48" src="assets/badge-android.svg" />
 </a>
@@ -130,11 +126,6 @@ The short version:
 git clone --recurse-submodules https://github.com/OpenMinis/OpenMinis.git
 cd OpenMinis
 
-# iOS  — order matters: FFmpeg links against LAME
-./deps/build_lame.sh && ./deps/build_ffmpeg.sh
-./deps/build_ish.sh && ./deps/prepare_alpine_rootfs.sh
-open src/ios/Minis.xcodeproj
-
 # Android — needs NDK r28+
 ./deps/build_proot.sh && ./scripts/prepare_android_sandbox.sh
 cd src/android && ./gradlew :app:assembleDebug
@@ -149,9 +140,7 @@ you are most likely to hit.
 ## Repository layout
 
 ```
-src/ios/          iOS app (Swift / SwiftUI) + share, widget and file-provider extensions
 src/android/      Android app (Kotlin / Compose) + JNI native code
-src/shared/       Assets shared by both platforms
 deps/             Native dependency build scripts and vendored sources
 docs/specs/       Architecture and interface specifications
 scripts/          Rootfs preparation and developer tooling

@@ -1,8 +1,7 @@
 # Building Minis
 
 Minis ships a full Linux sandbox inside the app, so a first build is not just
-"open the project and press Run": the native dependencies (iSH on iOS, PRoot on
-Android, FFmpeg, LAME) and the Alpine rootfs are **built from source by the
+"open the project and press Run": the native dependencies (PRoot on Android, FFmpeg, LAME) and the Alpine rootfs are **built from source by the
 scripts in `deps/`**, not committed as binaries. Budget ~30–60 minutes for the
 first build; afterwards the artifacts are cached on disk and normal builds are
 fast.
@@ -36,9 +35,6 @@ Some values are injected at build time and are **not** in this repository.
 Copy the templates before building:
 
 ```sh
-cp src/ios/Configs/ProviderCustomization.xcconfig.example \
-   src/ios/Configs/ProviderCustomization.xcconfig
-
 cp src/android/app/provider-customization.properties.example \
    src/android/app/provider-customization.properties
 ```
@@ -66,78 +62,6 @@ which you can consult for the exact wording.
 
 Everything else — Anthropic API keys, and every other provider — works
 without setting this.
-
----
-
-## iOS
-
-### Requirements
-
-| Tool | Version / notes |
-|---|---|
-| macOS | Apple Silicon strongly recommended (see the simulator note below) |
-| Xcode | With the iOS SDK; the project targets **iOS 26.2** and **Swift 6.0** |
-| Homebrew packages | `brew install ninja llvm libarchive pkg-config` |
-| Python 3 + Meson | `pip3 install meson` |
-
-`llvm` is needed to compile the guest VDSO, `libarchive` to unpack the rootfs,
-and Meson/Ninja to build the iSH kernel.
-
-### 1. Build the native dependencies
-
-Run these from the repository root, **in this order** — FFmpeg links against
-LAME, so LAME must exist first or MP3 encoding is silently dropped:
-
-```sh
-./deps/build_lame.sh          # → deps/lame-build/lib/libmp3lame.a
-./deps/build_ffmpeg.sh        # → deps/frameworks/*.framework  (LGPL config)
-./deps/build_ish.sh           # → deps/libs/*.a, deps/include/, deps/resources/
-./deps/prepare_alpine_rootfs.sh   # → deps/resources/alpine-rootfs.zip
-```
-
-What each produces:
-
-- **`build_lame.sh`** — LAME 3.100 as a static library for arm64.
-- **`build_ffmpeg.sh`** — FFmpeg 6.1.2 as per-library `.framework` bundles plus
-  an umbrella `FFmpeg.framework`. Configured **LGPL**: do not add
-  `--enable-gpl` or `--enable-nonfree` — see [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
-- **`build_ish.sh`** — `libish`, `libish_emu`, `libfakefs` from the `deps/ish`
-  submodule, plus headers and the VDSO.
-- **`prepare_alpine_rootfs.sh`** — downloads Alpine aarch64 minirootfs and
-  converts it to iSH's fakefs format.
-
-The Xcode project references `deps/libs/`, `deps/include/`, `deps/frameworks/`
-and `deps/resources/` relative to the project, so nothing needs to be copied
-by hand.
-
-### 2. Build the app
-
-```sh
-open src/ios/Minis.xcodeproj
-```
-
-Select the **Minis** scheme and build. For a device build, set your own team
-under *Signing & Capabilities* — the project ships with an empty
-`DEVELOPMENT_TEAM`.
-
-From the command line:
-
-```sh
-xcodebuild -project src/ios/Minis.xcodeproj -scheme Minis \
-           -configuration Debug -destination 'generic/platform=iOS' \
-           CODE_SIGNING_ALLOWED=NO build
-```
-
-> **Simulator builds need simulator-architecture dependencies.** The scripts
-> above build for **device arm64**. Linking a simulator build against them
-> fails with `building for 'iOS-simulator', but linking in object file built
-> for 'iOS'` (or a missing-symbol error for x86_64 on Intel Macs). Build for a
-> device destination, or rebuild the native deps for the simulator SDK.
-
-### Targets
-
-`Minis` (app), `MinisShare` (share extension), `AgentWidgetExtension`,
-`MinisFileProvider`, plus `MinisTests` / `MinisUITests`.
 
 ---
 
