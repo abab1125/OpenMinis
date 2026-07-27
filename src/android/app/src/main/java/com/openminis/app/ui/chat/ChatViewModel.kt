@@ -499,7 +499,7 @@ class ChatViewModel(
     }
 
     /**
-     * Hermes-backend turn: forward [userText] to the Mac-side Hermes gateway
+     * Hermes-backend turn: forward [userText] to the local Hermes gateway
      * and render the streamed reply. Bypasses the local agent loop entirely
      * (tools/skills/memory run on Hermes). Lifecycle:
      *  1. ensure the WS is connected + obtain a live session handle
@@ -1041,7 +1041,7 @@ class ChatViewModel(
         get() = buildList {
             addAll(AgentTools.makeAgentTools(memoryEnabled = _memoryEnabled.value))
             // Hermes-backend sessions never expose local tools - tools run on
-            // the Mac-side Hermes gateway, OpenMinis is just the UI channel.
+            // the local Hermes gateway, OpenMinis is just the UI channel.
             if (isHermesBackend) return@buildList
             // book_select lets the agent bind a book to this session at runtime
             // (fuzzy-match by title). Always exposed on local sessions so an
@@ -5394,7 +5394,7 @@ class ChatViewModel(
 
                 // ── Hermes backend: transparent passthrough ──
                 // Bypass the local agent loop entirely. The user's text is
-                // forwarded to the Mac-side Hermes gateway via prompt.submit;
+                // forwarded to the local Hermes gateway via prompt.submit;
                 // the streamed reply arrives as message.* events which
                 // runHermesTurn collects and renders through the same
                 // updateAssistantMessage path the local loop uses. No local

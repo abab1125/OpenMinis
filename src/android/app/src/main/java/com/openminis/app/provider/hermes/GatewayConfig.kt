@@ -2,8 +2,8 @@ package com.openminis.app.provider.hermes
 
 /**
  * Hermes gateway connection config. OpenMinis only uses loopback-token mode
- * (the gateway is reached through the Aliyun nginx reverse proxy -> SSH tunnel
- * -> Mac-side Hermes on :8642), so we keep just [baseUrl] + [token] and drop
+ * (the gateway is reached through a self-hosted reverse proxy (e.g. nginx on a VPS) -> SSH tunnel
+ * -> the local Hermes daemon on :8642), so we keep just [baseUrl] + [token] and drop
  * the gated (username/password + WS ticket) flow from the upstream client.
  *
  * `X-Hermes-Session-Token` is sent as the auth header on REST, and `?token=`

@@ -41,8 +41,8 @@ import kotlinx.coroutines.withContext
 
 /**
  * B-hermes: configuration for the transparent Hermes gateway passthrough
- * (mode B). The gateway is reached through the Aliyun nginx reverse proxy
- * -> SSH reverse tunnel -> Mac-side Hermes on :8642, so the only credentials
+ * (mode B). The gateway is reached through a self-hosted reverse proxy (e.g. nginx)
+ * -> SSH reverse tunnel -> the local Hermes daemon on :8642, so the only credentials
  * OpenMinis needs are a base URL (pointing at the public nginx) and a
  * loopback session token. Persisted to EncryptedSharedPreferences via
  * [HermesClientHolder.saveConfig]; takes effect on the next connect.
@@ -85,7 +85,7 @@ fun HermesGatewaySettingsScreen(onBack: () -> Unit) {
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Text(
-                "Connect to the Mac-side Hermes agent. Messages in a " +
+                "Connect to the local Hermes agent. Messages in a " +
                     "Hermes-backend session transparently passthrough to the " +
                     "gateway; skills, memory and tools run on Hermes.",
                 style = MaterialTheme.typography.bodyMedium,

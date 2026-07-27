@@ -860,7 +860,7 @@ private fun DualFabRow(
                 onDismissRequest = { showGroupMenu = false },
             ) {
                 // B-hermes: top entry creates a Hermes-backend session (messages
-                // transparently passthrough to the Mac-side gateway). Separated
+                // transparently passthrough to the local gateway). Separated
                 // from the per-group entries by a divider so it reads as a mode
                 // switch, not another group.
                 DropdownMenuItem(

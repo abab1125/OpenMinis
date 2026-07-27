@@ -167,7 +167,7 @@ fun SettingsScreen(
                     icon = Icons.Outlined.Public,
                     iconColor = Color(0xFF30B0C7),
                     title = "Hermes Gateway",
-                    subtitle = "Passthrough to the Mac-side Hermes agent",
+                    subtitle = "Passthrough to the local Hermes agent",
                     onClick = onHermesGatewayClick,
                     showDivider = false,
                 )
