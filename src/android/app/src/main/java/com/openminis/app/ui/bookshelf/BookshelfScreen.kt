@@ -19,6 +19,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.weight
+import androidx.compose.foundation.layout.wrapContentWidth
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.material.icons.outlined.ArrowBack
+import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -47,6 +53,14 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import com.openminis.app.data.db.BookSourceEntity
+import com.openminis.app.data.repository.BookSourceRepository
+import com.openminis.app.data.repository.RemoteBook
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -89,6 +103,20 @@ fun BookshelfScreen(
     var importProgress by remember { mutableStateOf(0 to 0) }
     var importError by remember { mutableStateOf<String?>(null) }
 
+    // Book-source UI state. Sources are remote (Room-backed) and shown on a
+    // separate "书源" tab; selecting one opens its live book list.
+    var tab by remember { mutableStateOf(0) } // 0 = 我的书, 1 = 书源
+    var sources by remember { mutableStateOf<List<BookSourceEntity>>(emptyList()) }
+    var selectedSource by remember { mutableStateOf<BookSourceEntity?>(null) }
+    var showImportSourceDialog by remember { mutableStateOf(false) }
+
+    fun refreshSources() {
+        scope.launch {
+            sources = withContext(Dispatchers.IO) { BookSourceRepository.listSources(context) }
+        }
+    }
+    LaunchedEffect(Unit) { refreshSources() }
+
     val txtLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument(),
     ) { uri ->
@@ -101,91 +129,140 @@ fun BookshelfScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = {
-                    Text("书架", fontWeight = FontWeight.Bold, fontSize = MaterialTheme.typography.titleLarge.fontSize)
-                },
-                actions = {
-                    // Import a TXT file -> split into chapters -> new book.
-                    IconButton(onClick = {
-                        txtLauncher.launch(arrayOf("text/plain", "application/octet-stream", "*/*"))
-                    }) {
-                        Icon(Icons.Outlined.FileUpload, contentDescription = "导入 TXT")
+            Column {
+                TopAppBar(
+                    title = {
+                        Text("书架", fontWeight = FontWeight.Bold, fontSize = MaterialTheme.typography.titleLarge.fontSize)
+                    },
+                    actions = {
+                        // Import a TXT file -> split into chapters -> new book.
+                        if (tab == 0) {
+                            IconButton(onClick = {
+                                txtLauncher.launch(arrayOf("text/plain", "application/octet-stream", "*/*"))
+                            }) {
+                                Icon(Icons.Outlined.FileUpload, contentDescription = "导入 TXT")
+                            }
+                        }
+                    },
+                )
+                if (selectedSource == null) {
+                    TabRow(selectedTabIndex = tab) {
+                        Tab(
+                            selected = tab == 0,
+                            onClick = { tab = 0 },
+                            text = { Text("我的书") },
+                        )
+                        Tab(
+                            selected = tab == 1,
+                            onClick = { tab = 1 },
+                            text = { Text("书源") },
+                        )
                     }
-                },
-            )
+                }
+            }
         },
         floatingActionButton = {
-            FloatingActionButton(
-                onClick = { showNewBookDialog = true },
-                containerColor = MaterialTheme.colorScheme.primary,
-            ) {
-                Icon(Icons.Default.Add, contentDescription = "新建书")
+            if (selectedSource == null) {
+                FloatingActionButton(
+                    onClick = {
+                        if (tab == 1) showImportSourceDialog = true else showNewBookDialog = true
+                    },
+                    containerColor = MaterialTheme.colorScheme.primary,
+                ) {
+                    Icon(
+                        Icons.Default.Add,
+                        contentDescription = if (tab == 1) "导入书源" else "新建书",
+                    )
+                }
             }
         },
     ) { padding ->
-        if (importing) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(padding),
-                contentAlignment = Alignment.Center,
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    CircularProgressIndicator()
-                    Spacer(Modifier.height(12.dp))
-                    val (done, total) = importProgress
-                    Text(
-                        if (total > 0) "正在导入章节 $done / $total" else "正在读取并分章…",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+        when {
+            selectedSource != null ->
+                BookSourceBooksContent(
+                    modifier = Modifier.fillMaxSize().padding(padding),
+                    source = selectedSource!!,
+                    onBack = { selectedSource = null },
+                    context = context,
+                )
+            tab == 1 ->
+                SourcesContent(
+                    modifier = Modifier.fillMaxSize().padding(padding),
+                    sources = sources,
+                    onSourceClick = { selectedSource = it },
+                    onImportClick = { showImportSourceDialog = true },
+                    onDelete = { url ->
+                        scope.launch {
+                            withContext(Dispatchers.IO) { BookSourceRepository.deleteSource(url, context) }
+                            refreshSources()
+                        }
+                    },
+                )
+            importing -> {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(padding),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        CircularProgressIndicator()
+                        Spacer(Modifier.height(12.dp))
+                        val (done, total) = importProgress
+                        Text(
+                            if (total > 0) "正在导入章节 $done / $total" else "正在读取并分章…",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
-        } else if (books.isEmpty()) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(padding),
-                contentAlignment = Alignment.Center,
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(
-                        Icons.Outlined.AutoStories,
-                        contentDescription = null,
-                        modifier = Modifier.height(64.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
-                    )
-                    Spacer(Modifier.height(16.dp))
-                    Text(
-                        "还没有书",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        "点击 + 创建你的第一本小说",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                    )
+            books.isEmpty() -> {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(padding),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(
+                            Icons.Outlined.AutoStories,
+                            contentDescription = null,
+                            modifier = Modifier.height(64.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                        )
+                        Spacer(Modifier.height(16.dp))
+                        Text(
+                            "还没有书",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            "点击 + 创建你的第一本小说",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                        )
+                    }
                 }
             }
-        } else {
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(2),
-                contentPadding = PaddingValues(16.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(padding),
-            ) {
-                items(books, key = { it.id }) { book ->
-                    BookCard(
-                        book = book,
-                        onClick = { onBookClick(book.id) },
-                        onDelete = { showDeleteConfirm = book.id },
-                    )
+            else -> {
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(2),
+                    contentPadding = PaddingValues(16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(padding),
+                ) {
+                    items(books, key = { it.id }) { book ->
+                        BookCard(
+                            book = book,
+                            onClick = { onBookClick(book.id) },
+                            onDelete = { showDeleteConfirm = book.id },
+                        )
+                    }
                 }
             }
         }
@@ -250,6 +327,32 @@ fun BookshelfScreen(
             text = msg,
             confirmText = "知道了",
             onConfirm = { importError = null },
+        )
+    }
+
+    // Book-source import dialog (paste legado JSON or a URL)
+    if (showImportSourceDialog) {
+        ImportSourceDialog(
+            onDismiss = { showImportSourceDialog = false },
+            onConfirm = { text ->
+                scope.launch {
+                    val imported = withContext(Dispatchers.IO) {
+                        runCatching {
+                            val t = text.trim()
+                            if (t.startsWith("http://") || t.startsWith("https://"))
+                                BookSourceRepository.importFromUrl(t, context)
+                            else
+                                BookSourceRepository.importFromText(t, context)
+                        }.getOrNull() ?: emptyList()
+                    }
+                    showImportSourceDialog = false
+                    if (imported.isEmpty()) {
+                        importError = "导入失败：无法解析书源 JSON，或 URL 无法访问。"
+                    } else {
+                        refreshSources()
+                    }
+                }
+            },
         )
     }
 
@@ -534,4 +637,232 @@ private fun bookCoverColor(genre: String): Color {
     )
     val idx = genre.hashCode().let { if (it == Int.MIN_VALUE) 0 else kotlin.math.abs(it) } % palette.size
     return palette[idx]
+}
+
+// ── Book-source UI (legado-format remote sources) ──────────────────────────
+
+@Composable
+private fun SourcesContent(
+    modifier: Modifier = Modifier,
+    sources: List<BookSourceEntity>,
+    onSourceClick: (BookSourceEntity) -> Unit,
+    onImportClick: () -> Unit,
+    onDelete: (String) -> Unit,
+) {
+    if (sources.isEmpty()) {
+        Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Icon(
+                    Icons.Outlined.AutoStories,
+                    contentDescription = null,
+                    modifier = Modifier.height(64.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                )
+                Spacer(Modifier.height(16.dp))
+                Text("还没有书源", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(8.dp))
+                Text("点 + 导入书源（legado 格式 JSON 或 URL）", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f))
+            }
+        }
+    } else {
+        LazyColumn(modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            items(sources, key = { it.bookSourceUrl }) { src ->
+                SourceCard(src, onClick = { onSourceClick(src) }, onDelete = { onDelete(src.bookSourceUrl) })
+            }
+        }
+    }
+}
+
+@Composable
+private fun SourceCard(source: BookSourceEntity, onClick: () -> Unit, onDelete: () -> Unit) {
+    val color = bookCoverColor(source.bookSourceGroup ?: source.bookSourceName)
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        onClick = onClick,
+    ) {
+        Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier.size(48.dp).clip(RoundedCornerShape(12.dp)).background(color),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(Icons.Outlined.Book, contentDescription = null, modifier = Modifier.height(28.dp), tint = Color.White.copy(alpha = 0.8f))
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(source.bookSourceName, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (!source.bookSourceGroup.isNullOrBlank()) {
+                    Text(source.bookSourceGroup!!, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                }
+                Text(if (source.enabledExplore) "可探索" else "不可探索", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            IconButton(onClick = onDelete) {
+                Icon(Icons.Outlined.Delete, contentDescription = "删除书源", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
+}
+
+@Composable
+private fun BookSourceBooksContent(
+    modifier: Modifier = Modifier,
+    source: BookSourceEntity,
+    onBack: () -> Unit,
+    context: Context,
+) {
+    val scope = rememberCoroutineScope()
+    var books by remember { mutableStateOf<List<RemoteBook>>(emptyList()) }
+    var loading by remember { mutableStateOf(false) }
+    var page by remember { mutableStateOf(1) }
+    val categories = BookSourceRepository.categories(source)
+    var categoryIndex by remember { mutableStateOf(0) }
+
+    fun load(reset: Boolean) {
+        scope.launch {
+            loading = true
+            val next = withContext(Dispatchers.IO) {
+                runCatching {
+                    BookSourceRepository.exploreBooks(
+                        source,
+                        if (reset) 0 else categoryIndex,
+                        if (reset) 1 else page,
+                        context,
+                    )
+                }.getOrDefault(emptyList())
+            }
+            loading = false
+            if (reset) {
+                books = next
+                page = 2
+            } else {
+                books = books + next
+                page++
+            }
+        }
+    }
+
+    LaunchedEffect(categoryIndex) { load(true) }
+
+    Column(modifier) {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(12.dp)) {
+            IconButton(onClick = onBack) { Icon(Icons.Outlined.ArrowBack, contentDescription = "返回") }
+            Text(
+                source.bookSourceName,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+        }
+        if (categories.isNotEmpty()) {
+            LazyRow(contentPadding = PaddingValues(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(categories.indices.toList()) { i ->
+                    val selected = i == categoryIndex
+                    com.openminis.app.ui.components.MinisTextButton(onClick = { categoryIndex = i }) {
+                        Text(
+                            categories[i],
+                            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+        }
+        when {
+            loading && books.isEmpty() ->
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+            books.isEmpty() ->
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text("该分类暂无书", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            else ->
+                LazyColumn(modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(books, key = { it.bookUrl }) { b -> BookRow(b) }
+                    if (loading) {
+                        item {
+                            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                                CircularProgressIndicator()
+                            }
+                        }
+                    }
+                    item {
+                        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                            com.openminis.app.ui.components.MinisTextButton(onClick = { load(false) }) {
+                                Text("加载更多", color = MaterialTheme.colorScheme.primary)
+                            }
+                        }
+                    }
+                }
+        }
+    }
+}
+
+@Composable
+private fun BookRow(book: RemoteBook) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+    ) {
+        Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier.size(44.dp).clip(RoundedCornerShape(8.dp)).background(bookCoverColor(book.kind)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(Icons.Outlined.Book, contentDescription = null, modifier = Modifier.height(24.dp), tint = Color.White.copy(alpha = 0.8f))
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(book.name, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                val sub = listOfNotNull(
+                    book.author.takeIf { it.isNotBlank() },
+                    book.kind.takeIf { it.isNotBlank() },
+                    book.lastChapter.takeIf { it.isNotBlank() },
+                ).joinToString(" · ")
+                if (sub.isNotBlank()) {
+                    Text(sub, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ImportSourceDialog(onDismiss: () -> Unit, onConfirm: (String) -> Unit) {
+    var text by remember { mutableStateOf("") }
+    androidx.compose.ui.window.Dialog(
+        onDismissRequest = onDismiss,
+        properties = androidx.compose.ui.window.DialogProperties(dismissOnBackPress = true, dismissOnClickOutside = true),
+    ) {
+        androidx.compose.material3.Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 6.dp,
+        ) {
+            Column(modifier = Modifier.fillMaxWidth().padding(24.dp)) {
+                Text("导入书源", style = MaterialTheme.typography.titleLarge)
+                Spacer(Modifier.height(16.dp))
+                Text("粘贴书源 JSON（单条或数组）或书源 URL", style = MaterialTheme.typography.labelMedium)
+                Spacer(Modifier.height(8.dp))
+                DialogTextField(
+                    value = text,
+                    onValueChange = { text = it },
+                    placeholder = "https://.../source.json  或  [{...}]",
+                    singleLine = false,
+                    maxLines = 6,
+                )
+                Spacer(Modifier.height(20.dp))
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    com.openminis.app.ui.components.MinisTextButton(onClick = onDismiss) { Text("取消") }
+                    Spacer(Modifier.width(8.dp))
+                    com.openminis.app.ui.components.MinisTextButton(onClick = { if (text.isNotBlank()) onConfirm(text) }) {
+                        Text("导入", color = MaterialTheme.colorScheme.primary)
+                    }
+                }
+            }
+        }
+    }
 }
