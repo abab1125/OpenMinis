@@ -410,8 +410,15 @@ internal fun UserMessageBubble(
                                 isStreaming = false,
                                 stableKey = "user:${message.id}",
                             ) {
+                                // T-mention-autoinject: render `@/var/minis/...`
+                                // mentions as highlighted chips (shortened to
+                                // `@skills/foo`) so referenced skills/files read
+                                // like the "@知识库" pills in the reference UX.
+                                val annotated = remember(message.content, textColor) {
+                                    annotateMentionsForDisplay(message.content, textColor)
+                                }
                                 Text(
-                                    text = message.content,
+                                    text = annotated,
                                     color = textColor,
                                     style = MaterialTheme.typography.bodyMedium.copy(fontSize = 16.5.sp),
                                     modifier = bubbleModifier
@@ -511,6 +518,43 @@ internal fun UserMessageBubble(
  * Files render as icon + 2-line filename (tap → system handler).
  */
 @OptIn(ExperimentalLayoutApi::class)
+/** Matches `@/var/minis/...` tokens in a sent message (ASCII or full-width @). */
+private val MENTION_DISPLAY_REGEX = Regex("[@＠]/var/minis/[^\\s]+")
+
+/**
+ * Style `@/var/minis/...` mentions inside a user bubble: the token is
+ * shortened (`@skills/novel-writing` instead of the full Linux path) and
+ * rendered semi-bold on a translucent pill-ish background so it reads as a
+ * reference chip rather than a raw path. Pure display transform — the
+ * persisted message (and what the model sees) keeps the full path.
+ */
+internal fun annotateMentionsForDisplay(
+    content: String,
+    baseColor: Color,
+): AnnotatedString {
+    if (!content.contains("/var/minis/")) return AnnotatedString(content)
+    return buildAnnotatedString {
+        var last = 0
+        for (m in MENTION_DISPLAY_REGEX.findAll(content)) {
+            append(content.substring(last, m.range.first))
+            val display = "@" + m.value
+                .removePrefix("@").removePrefix("＠")
+                .removePrefix("/var/minis/")
+            withStyle(
+                SpanStyle(
+                    color = baseColor,
+                    fontWeight = FontWeight.SemiBold,
+                    background = baseColor.copy(alpha = 0.14f),
+                )
+            ) {
+                append(display)
+            }
+            last = m.range.last + 1
+        }
+        append(content.substring(last))
+    }
+}
+
 @Composable
 internal fun UserAttachmentList(
     imageUris: List<Uri>,

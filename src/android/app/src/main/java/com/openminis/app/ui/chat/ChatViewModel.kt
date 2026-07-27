@@ -5165,6 +5165,10 @@ class ChatViewModel(
         }
         prepared.attachedFilesXml?.let { combinedParts.add(AgentContentPart.Text(it)) }
 
+        // T-mention-autoinject: queued prompts get the same @-mention
+        // context injection as a direct send (see sendMessage).
+        combinedParts.addAll(buildMentionContextParts(combinedText.toString()))
+
         // Guard: every queued prompt produced no content (no text, no
         // image). An empty user msg is a 400 from every provider. Skip —
         // the caller falls through to a normal next-turn dispatch so the
@@ -5468,6 +5472,11 @@ class ChatViewModel(
                 userContentParts.add(AgentContentPart.ImageData(part.data, part.mimeType, linuxPath = path))
             }
             prepared.attachedFilesXml?.let { userContentParts.add(AgentContentPart.Text(it)) }
+
+            // T-mention-autoinject: resolve `@/var/minis/...` mentions and
+            // inject their content as <mention-context> blocks so referenced
+            // skills/files are live context without an extra file_read turn.
+            userContentParts.addAll(buildMentionContextParts(trimmed))
 
             agentHistory.add(LLMMessage(
                 role = LLMMessage.Role.USER,

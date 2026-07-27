@@ -154,6 +154,118 @@ internal fun ChatViewModel.dismissMentionMenu() {
     clearMentionContentSearch()
 }
 
+// ── @-mention auto-injection (T-mention-autoinject, aka P1 of the
+// "灵犀娘 thinking-flow" plan) ────────────────────────────────────────────
+//
+// Before this, `@/var/minis/skills/foo` in a sent message was plain text:
+// the model saw a path, had to *choose* to file_read it, costing a turn and
+// sometimes skipping it entirely. Now sendMessage resolves each mentioned
+// path and injects its content directly into the user turn as
+// <mention-context> blocks, so referenced skills/files are live context
+// from token one — mirroring the "@知识库引用" behavior in the reference
+// screenshots (knowledge base == the existing skill system, per 老板).
+
+/** Matches `@/var/minis/...` tokens (ASCII or full-width @). */
+private val MENTION_PATH_REGEX = Regex("[@＠](/var/minis/[^\\s]+)")
+
+/** Per-file char cap (~16 KB): full injection below, truncate + hint above. */
+private const val MENTION_FILE_CHAR_CAP = 16_384
+
+/** Total injected chars across all mentions in one message (~48 KB). */
+private const val MENTION_TOTAL_CHAR_BUDGET = 49_152
+
+/** Files larger than this are never inlined — the agent is told to read it. */
+private const val MENTION_FILE_HARD_SKIP_BYTES = 512 * 1024L
+
+/**
+ * Resolve every `@/var/minis/...` mention in [text] and build
+ * `<mention-context>` content parts:
+ *   - skill directory (has SKILL.md)  → inject the SKILL.md, record skill use
+ *   - other directory                 → inject a one-level listing
+ *   - text file ≤ cap                 → inject full content
+ *   - text file > cap                 → inject truncated head + read-hint
+ *   - binary / oversized / missing    → short note (agent can still act)
+ * Returns an empty list when the text has no resolvable mentions.
+ */
+internal suspend fun ChatViewModel.buildMentionContextParts(
+    text: String,
+): List<AgentContentPart> = withContext(Dispatchers.IO) {
+    val paths = LinkedHashSet<String>()
+    MENTION_PATH_REGEX.findAll(text).forEach { m ->
+        // Strip trailing punctuation the user may have typed right after the path.
+        paths += m.groupValues[1].trimEnd('.', ',', ';', ':', '，', '。', '；', '：', ')', '）', ']', '】')
+    }
+    if (paths.isEmpty()) return@withContext emptyList()
+
+    val parts = mutableListOf<AgentContentPart>()
+    var budget = MENTION_TOTAL_CHAR_BUDGET
+    for (path in paths) {
+        if (budget <= 0) break
+        val host = try {
+            com.openminis.app.sandbox.PRootKernel
+                .resolveSessionHostPath(activeSessionId, path, context)
+        } catch (_: Exception) { null } ?: continue
+
+        var target = host
+        var effectivePath = path
+        if (host.isDirectory) {
+            val skillMd = java.io.File(host, "SKILL.md")
+            if (skillMd.isFile) {
+                target = skillMd
+                effectivePath = "$path/SKILL.md"
+            } else {
+                val listing = host.listFiles()
+                    ?.sortedBy { it.name }
+                    ?.take(60)
+                    ?.joinToString("\n") { it.name + if (it.isDirectory) "/" else "" }
+                    .orEmpty()
+                parts += AgentContentPart.Text(
+                    "<mention-context path=\"$path\" type=\"directory\">\n$listing\n</mention-context>"
+                )
+                budget -= listing.length
+                continue
+            }
+        }
+        if (!target.isFile) continue
+        if (target.length() > MENTION_FILE_HARD_SKIP_BYTES) {
+            parts += AgentContentPart.Text(
+                "<mention-context path=\"$effectivePath\" note=\"file too large to inline " +
+                    "(${target.length()} bytes) — use file_read with offset/lines to read it\"/>"
+            )
+            continue
+        }
+        // Binary probe (same heuristic as FileReadTool).
+        val binary = try {
+            target.inputStream().use { input ->
+                val buf = ByteArray(minOf(8192L, target.length()).toInt())
+                val read = input.read(buf)
+                read > 0 && buf.take(read).any { it == 0.toByte() }
+            }
+        } catch (_: Exception) { true }
+        if (binary) continue
+
+        var content = try { target.readText() } catch (_: Exception) { continue }
+        val cap = minOf(MENTION_FILE_CHAR_CAP, budget)
+        var truncatedAttr = ""
+        if (content.length > cap) {
+            content = content.take(cap)
+            truncatedAttr = " truncated=\"true\" note=\"use file_read with offset to see the rest\""
+        }
+        parts += AgentContentPart.Text(
+            "<mention-context path=\"$effectivePath\"$truncatedAttr>\n$content\n</mention-context>"
+        )
+        budget -= content.length
+
+        // Mirror the FileReadTool hook: an @-mentioned skill counts as used.
+        runCatching {
+            skillRepository?.skillIdFromPath(effectivePath)?.let { sid ->
+                skillRepository?.recordSkillUse(sid)
+            }
+        }
+    }
+    parts
+}
+
 /**
  * Commit a content-search hit into the composer. Same token-replacement
  * semantics as [selectMention] — we wrap the hit's path in a synthetic
