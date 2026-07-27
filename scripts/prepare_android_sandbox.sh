@@ -5,6 +5,11 @@
 #   2. Download PRoot aarch64 static binary from Termux packages
 #   3. Place both into src/android/app/src/main/assets/
 #
+# Downloads are cached in $OPENMINIS_DL_CACHE (default ~/.cache/openminis) so
+# CI / repeated local runs don't re-hit the network every time. The CI workflow
+# persists that directory with actions/cache, eliminating flaky external
+# downloads on warm runs.
+#
 # Usage: ./scripts/prepare_android_sandbox.sh
 #
 
@@ -14,6 +19,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 ASSETS_DIR="$PROJECT_ROOT/src/android/app/src/main/assets"
 
+# Download cache: keep tarballs/debs here across runs (CI actions/cache restores it)
+CACHE_DIR="${OPENMINIS_DL_CACHE:-$HOME/.cache/openminis}"
+mkdir -p "$CACHE_DIR"
+
 ALPINE_VERSION="3.21"
 ALPINE_RELEASE="3.21.3"
 ALPINE_URL="https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_VERSION}/releases/aarch64/alpine-minirootfs-${ALPINE_RELEASE}-aarch64.tar.gz"
@@ -21,6 +30,28 @@ ALPINE_URL="https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_VERSION}/releases/aa
 # Termux proot package — aarch64 static binary
 PROOT_VERSION="5.1.107-70"
 PROOT_DEB_URL="https://packages.termux.dev/apt/termux-main/pool/main/p/proot/proot_${PROOT_VERSION}_aarch64.deb"
+
+# download_cached <url> <cache-filename> [verify-command]
+#   Downloads to $CACHE_DIR if missing, runs optional verify command on the
+#   cached file (must exit non-zero on corruption), echoes the cached path.
+#   On verification failure it re-downloads once before giving up.
+download_cached() {
+  local url="$1" name="$2" verify="${3:-}"
+  local cached="$CACHE_DIR/$name"
+  if [ -f "$cached" ] && { [ -z "$verify" ] || eval "$verify \"$cached\""; }; then
+    echo "✓ cached download present: $name"
+  else
+    echo "Downloading $url ..."
+    curl -fSL -o "$cached" "$url"
+    if [ -n "$verify" ] && ! eval "$verify \"$cached\""; then
+      echo "Downloaded file failed verification, retrying once..."
+      rm -f "$cached"
+      curl -fSL -o "$cached" "$url"
+      eval "$verify \"$cached\""
+    fi
+  fi
+  echo "$cached"
+}
 
 mkdir -p "$ASSETS_DIR"
 
@@ -31,26 +62,23 @@ PROOT_FILE="$ASSETS_DIR/proot-aarch64"
 if [ -f "$ROOTFS_FILE" ]; then
     echo "✓ Alpine rootfs already exists: $ROOTFS_FILE"
 else
-    echo "Downloading Alpine Linux ${ALPINE_RELEASE} aarch64 minirootfs..."
-    curl -fSL -o "$ROOTFS_FILE" "$ALPINE_URL"
-    echo "✓ Downloaded: $ROOTFS_FILE ($(du -h "$ROOTFS_FILE" | cut -f1))"
+    cached_rootfs=$(download_cached "$ALPINE_URL" "alpine-minirootfs-${ALPINE_RELEASE}-aarch64.tar.gz" "tar -tzf")
+    cp "$cached_rootfs" "$ROOTFS_FILE"
+    echo "✓ Placed rootfs: $ROOTFS_FILE ($(du -h "$ROOTFS_FILE" | cut -f1))"
 fi
 
 # --- PRoot binary ---
 if [ -f "$PROOT_FILE" ]; then
     echo "✓ PRoot binary already exists: $PROOT_FILE"
 else
-    echo "Downloading PRoot ${PROOT_VERSION} aarch64 from Termux..."
+    cached_deb=$(download_cached "$PROOT_DEB_URL" "proot_${PROOT_VERSION}_aarch64.deb" "ar t")
 
     TMPDIR="$(mktemp -d)"
     trap 'rm -rf "$TMPDIR"' EXIT
 
-    DEB_FILE="$TMPDIR/proot.deb"
-    curl -fSL -o "$DEB_FILE" "$PROOT_DEB_URL"
-
-    # Extract .deb (it's an ar archive containing data.tar.xz)
+    cp "$cached_deb" "$TMPDIR/proot.deb"
     cd "$TMPDIR"
-    ar x "$DEB_FILE"
+    ar x "$TMPDIR/proot.deb"
 
     # Extract data archive
     if [ -f "data.tar.xz" ]; then
