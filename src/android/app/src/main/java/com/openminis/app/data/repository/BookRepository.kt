@@ -177,8 +177,14 @@ object BookRepository {
         context: Context,
         progress: ((written: Int, total: Int) -> Unit)? = null,
     ): String? {
-        val src = File(sourcePath)
-        if (!src.isFile) return null
+        // Resolve the source through the sandbox mapper (a /var/minis/mounts/*
+        // path maps to the real host file via bind mounts); fall back to a
+        // raw File for paths that already live on the Android host FS. Without
+        // this, sandbox paths are never found and every import fails.
+        val src = PRootKernel.resolveSessionHostPath("", sourcePath, context)
+            ?.takeIf { it.isFile }
+            ?: File(sourcePath).takeIf { it.isFile }
+            ?: return null
         val chapters = try {
             src.inputStream().use { input ->
                 com.openminis.app.data.imports.TxtChapterSplitter.split(input, regex, charset)
