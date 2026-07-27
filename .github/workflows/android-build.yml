@@ -102,11 +102,24 @@ jobs:
       - name: Build debug APK
         run: ./gradlew :app:assembleDebug --no-daemon
 
+      - name: Rename APK artifact
+        working-directory: ${{ github.workspace }}
+        run: |
+          SRC="src/android/app/build/outputs/apk/debug/app-debug.apk"
+          DST="src/android/app/build/outputs/apk/debug/OpenMinis.apk"
+          if [ -f "$SRC" ]; then
+            mv "$SRC" "$DST"
+            echo "Renamed APK -> OpenMinis.apk"
+          else
+            echo "::error::Expected $SRC not found"
+            exit 1
+          fi
+
       - name: Upload APK to Actions artifacts
         uses: actions/upload-artifact@v4
         with:
           name: minis-debug-apk
-          path: src/android/app/build/outputs/apk/debug/*.apk
+          path: src/android/app/build/outputs/apk/debug/OpenMinis.apk
           retention-days: 14
 
       - name: Determine release version
@@ -145,6 +158,6 @@ jobs:
             - 书架：创建/管理小说项目
             - Agent 写作工具：`book_*` 工具集
             - 四层写作上下文
-          artifacts: "src/android/app/build/outputs/apk/debug/*.apk"
+          artifacts: "src/android/app/build/outputs/apk/debug/OpenMinis.apk"
           makeLatest: true
           prerelease: true
