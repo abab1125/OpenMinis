@@ -17,8 +17,8 @@
 
 | 平台 | 状态 | 技术栈 |
 |------|------|--------|
-| iOS | 主线 | Swift, Xcode, 自建 iSH 内核（C + Meson/Ninja） |
-| Android | 主线（CI 仅构建 Android） | Kotlin, Jetpack Compose, Material 3, Gradle 8.11.1 |
+| Android | 唯一构建目标（CI 仅构建 Android） | Kotlin, Jetpack Compose, Material 3, Gradle 8.11.1 |
+| iOS | 已移除（本 fork 不含 iOS 源码，提交 `8e61467`） | 仅上游主线，本 fork 未保留 |
 
 Android 构建关键配置（`src/android/app/build.gradle.kts`）：
 - `compileSdk = 36`, `minSdk = 26`, `targetSdk = 35`
@@ -26,83 +26,102 @@ Android 构建关键配置（`src/android/app/build.gradle.kts`）：
 - NDK 28.0.12433566（PRoot 原生构建用）
 - 包名 `com.openminis.app`
 
-## 目录结构
+> 所有原生产物（`src/android/app/src/main/assets/proot-aarch64`、
+> `alpine-minirootfs.tar.gz`、`src/android/app/src/main/jniLibs/arm64-v8a/*.so`）
+> 都被 `.gitignore` 忽略，由本地/CI 构建脚本生成，**不要**把它们提交进仓库。
+
+## 目录结构（开发常用）
 
 ```
 OpenMinis/
-├── src/
-│   ├── android/          # Android 工程（Gradle）
-│   │   ├── app/src/main/java/com/openminis/app/
-│   │   │   ├── data/              # 数据层（DB / Repository / Model）
-│   │   │   ├── provider/          # LLM provider + Hermes 网关连接层
-│   │   │   │   └── hermes/        # ★ Hermes 透传连接层（9 个文件，独立模块）
-│   │   │   ├── tools/             # Agent 工具（BookTools / FileTools 等）
-│   │   │   ├── ui/                # Compose UI（chat / sessions / settings / bookshelf）
-│   │   │   └── MinisApp.kt        # Application 入口
-│   │   └── gradle/wrapper/        # Gradle 8.11.1
-│   └── ios/              # iOS 工程（Xcode）
-├── deps/                 # 原生依赖构建脚本（PRoot / iSH / lame / ffmpeg）
-├── scripts/              # 沙箱 rootfs 准备等脚本
-├── .github/workflows/    # CI（android-build.yml）
-├── BUILDING.md           # 构建指引（必读）
-└── HERMES_INTEGRATION.md # ★ Hermes 集成方案文档
+├── src/android/                     # Android 工程（Gradle，唯一构建目标）
+│   ├── app/src/main/java/com/openminis/app/
+│   │   ├── data/                    # 数据层（DB / Repository / Model）
+│   │   ├── provider/                # LLM provider + Hermes 透传连接层
+│   │   │   └── hermes/              # ★ Hermes 透传连接层（9 个文件，独立模块）
+│   │   ├── tools/                   # Agent 工具（BookTools / FileTools 等）
+│   │   ├── ui/                      # Compose UI（chat / sessions / settings / bookshelf）
+│   │   └── MinisApp.kt              # Application 入口
+│   └── gradle/wrapper/              # Gradle 8.11.1
+├── deps/
+│   ├── proot/                       # ★ Git 子模块（OpenMinis/proot fork），不要直接改
+│   ├── build_proot.sh               # 交叉编译 PRoot + libtalloc → assets/jniLibs
+│   ├── build_lame.sh / build_ffmpeg.sh
+│   └── talloc/                      # 由 build_proot.sh 生成，勿手改
+├── scripts/prepare_android_sandbox.sh  # 下载 Alpine rootfs + Termux proot → assets
+├── .github/workflows/android-build.yml  # CI（构建 + 发版到 Releases latest）
+├── BUILDING.md                      # 本地构建指引（必读）
+└── HERMES_INTEGRATION.md            # 已删除（旧方案，照做会触发 18+ 处 when 编译失败）
 ```
 
-## 构建与 CI
+> `deps/proot` 是 **git 子模块**，其源码不属于本仓库，改动要回到 OpenMinis/proot。
+> 本 fork 只消费它编译出的二进制。
 
-### 本地构建（Android）
+## 本地开发
 
-详见 `BUILDING.md`。核心步骤：
+### 前置条件
+- JDK 17、Android SDK（含 `cmdline-tools`）、NDK 28.0.12433566
+- 本机若不齐，可直接 push 到 `main` 让 CI 验证编译（见下）
 
+### 构建步骤
 ```bash
 cd src/android
-# 1. 先构建 PRoot 原生依赖
+# 1. 构建 PRoot 原生依赖（写入 assets/proot-aarch64 + jniLibs/*.so）
 cd ../../deps && bash build_proot.sh
-# 2. 下载 Alpine rootfs
+# 2. 下载 Alpine rootfs + Termux proot（写入 assets/alpine-minirootfs.tar.gz）
 cd .. && bash scripts/prepare_android_sandbox.sh
 # 3. 构建 APK
 cd src/android && ./gradlew :app:assembleDebug --no-daemon
 ```
-
 产物：`src/android/app/build/outputs/apk/debug/*.apk`
 
-> **注意**：本机若没有 JDK 17 + Android SDK + NDK 28，无法本地构建。
-> 依赖 CI 验证编译。
+> 下载脚本会把 tarball/deb 缓存到 `$HOME/.cache/openminis`（可用
+> `OPENMINIS_DL_CACHE` 覆盖），重复构建不再骚扰外网。
 
-### CI（GitHub Actions）
+## CI 与发版
 
-工作流文件：`.github/workflows/android-build.yml`
+工作流：`.github/workflows/android-build.yml`
 
-**触发条件**：
-- push 到 `main` 分支
-- 针 `main` 的 pull request
-- 手动触发（`workflow_dispatch`）
+**触发**：push 到 `main`、针对 `main` 的 PR、`workflow_dispatch`（手动）。
 
-**CI 做什么**：checkout（含子模块）→ JDK 17 → Android SDK → NDK 28 → 构建 PRoot →
-下载 Alpine rootfs → `./gradlew :app:assembleDebug` → 上传 APK 到 Actions artifacts
-（保留 14 天）→ 发布到 GitHub Releases（tag `latest`，可更新覆盖）。
+**流程**：checkout（含子模块）→ JDK17 → Android SDK → NDK → 构建 PRoot →
+下载 rootfs → 恢复 debug keystore → `./gradlew :app:assembleDebug` →
+上传 APK 到 Actions artifacts（14 天）→ 发布到 Releases `latest`（覆盖式 prerelease）。
 
-**手动触发 CI**：push 到 main 即可触发；或在 GitHub 仓库 Actions 页选
-"Build Android Debug APK" → Run workflow。
+**缓存（提速 + 稳化）**：
+- `~/.gradle`：Gradle 依赖与 wrapper。
+- `~/.cache/openminis`：Alpine rootfs、Termux proot deb、talloc 源码包（避免外网抖动）。
+- `deps/build` + `deps/proot/src` + `deps/talloc`：PRoot 增量编译产物。
+  key 绑定 `NDK 版本 + deps/proot 子模块 commit + build_proot.sh` 哈希；
+  **不使用 restore-keys 兜底**，防止命中不同 proot 源码的旧缓存而打出错误二进制。
+
+**如何让缓存失效（强制全量重建）**：改动以下任一即换 key →
+`NDK_VERSION` 环境变量、`deps/build_proot.sh`、或更新 `deps/proot` 子模块提交。
+下载缓存 key 绑定 `prepare_android_sandbox.sh` / `build_proot.sh` 内容。
+
+**签名**：用 Secrets `DEBUG_KEYSTORE_BASE64`（已配置）签名，发布的 APK 可与
+旧版覆盖安装；缺失则降级默认 keystore（每次签名不同，需先卸载旧版）。
 
 ## 代码约定
 
 1. **Kotlin / Compose 风格**：跟随周围代码的注释密度、命名、惯用法。
-   提交信息用 `type: subject` 格式（如 `fix: ...`、`feat: ...`）。
-2. **改动聚焦最小**：本仓库是定制 fork，改动要尽量小而自洽，避免大面积重构。
-3. **不要碰上游同步冲突点**：iOS 工程与本 fork 的定制无关，除非明确要求。
-4. **ProviderType 枚举**：是"LLM 后端类型"枚举，全项目多处 `when` 穷尽匹配。
-   **不要往里塞非 LLM 后端类型**（如 Hermes 透传通道）--会触发 18+ 处 when 编译失败。
+   提交信息用 `type: subject`（如 `fix: ...`、`feat: ...`、`ci: ...`、`docs: ...`）。
+2. **改动聚焦最小**：定制 fork，尽量小而自洽，避免大面积重构。
+3. **ProviderType 枚举**：是"LLM 后端类型"枚举，全项目多处 `when` 穷尽匹配。
+   **不要往里塞非 LLM 后端类型**（如 Hermes 透传通道）—会触发 18+ 处 when 编译失败。
    Hermes 透传走独立的 `session.backend` 字段分流，不进 ProviderType / ProviderFactory。
-5. **ChatViewModel.kt 很大**（9000+ 行），用 Edit 时务必核对行号，历史上有过
-   Edit 匹配错位置误删方法体的事故。
+4. **ChatViewModel.kt 很大**（9000+ 行）：用 Edit 务必核对行号，历史上有过
+   Edit 匹配错位置误删方法体的事故。建议先 Grep 定位唯一上下文再改。
+5. **提交要分逻辑**：Hermes 相关一个 commit、小说工具一个 commit、CI/文档各一个，
+   不要混成巨型 commit。
+6. **不要碰上游同步冲突点**：iOS 工程与本 fork 定制无关，除非明确要求。
 
 ## Hermes 网关透传（本 fork 定制）
 
-**模式 B**：让 OpenMinis 当 Hermes（Mac 端 agent）的消息通道，消息透传到 Hermes
+**模式 B**：OpenMinis 当 Hermes（Mac 端 agent）的消息通道，消息透传到 Hermes
 Gateway，叶赫赫的 skills/memory/tools 全在 Hermes 侧跑，OpenMinis 只当 UI 壳。
 
-**架构**（详见 `HERMES_INTEGRATION.md`）：
+**架构**：
 ```
 手机 OpenMinis → HTTPS → 阿里云 nginx(/hermes/api/) → SSH 反向隧道 → 本机 Hermes:8642
 ```
@@ -116,7 +135,7 @@ Gateway，叶赫赫的 skills/memory/tools 全在 Hermes 侧跑，OpenMinis 只�
 - `ui/settings/HermesGatewaySettingsScreen`：独立配置页（URL + token 表单）
 
 **关键**：Hermes 是 WebSocket RPC 端点（`/api/ws`），**不是** OpenAI 兼容的
-`/v1/chat/completions`，所以不能当普通 LLM provider 零代码配（模式 A 走不通）。
+`/v1/chat/completions`，不能当普通 LLM provider 零代码配（模式 A 走不通）。
 
 ## 小说创作工具集（本 fork 定制）
 
@@ -130,7 +149,10 @@ Gateway，叶赫赫的 skills/memory/tools 全在 Hermes 侧跑，OpenMinis 只�
   `book_write_outline` / `book_reference` / `book_get_context` / `book_search` /
   `book_load_skill`
 
-## 当前未提交改动
+## 当前状态与分支策略
 
-工作区有一批 Hermes 集成 + 小说工具的改动尚未提交（见 `git status`）。提交前
-确认改动范围，分逻辑提交（Hermes 一个 commit、小说工具一个 commit）。
+- Hermes 网关透传 + 小说创作工具改动已于 `7ae3577` 提交；iOS 源码已移除（提交 `8e61467`）。
+- 本 fork 仅构建 Android。
+- **分支策略**：本地改完直接 push 到 `main` 即触发 CI 出 `latest` APK（沿用"直接推 main"）。
+  需要 review 时再开 feature 分支 + PR。
+- 后续改动聚焦最小、单独提交（`type: subject`）。
