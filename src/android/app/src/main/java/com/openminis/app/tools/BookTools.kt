@@ -1,6 +1,8 @@
 package com.openminis.app.tools
 
 import android.content.Context
+import java.io.File
+import java.time.Instant
 import com.openminis.app.data.model.AgentToolDefinition
 import com.openminis.app.data.model.AgentToolParam
 import com.openminis.app.data.repository.BookRepository
@@ -37,6 +39,8 @@ object BookTools {
             add(searchDefinition())
             add(loadSkillDefinition())
             add(exportDefinition())
+            add(batchEditChapterDefinition())
+            add(undoDefinition())
         }
     }
 
@@ -70,6 +74,8 @@ object BookTools {
             "book_search" -> search(bookId, argsJson, context)
             "book_load_skill" -> loadSkill(bookId, argsJson, context)
             "book_export" -> exportBook(bookId, context)
+            "book_batch_edit_chapter" -> batchEditChapter(bookId, argsJson, context)
+            "book_undo" -> undoLastBatch(bookId, context)
             else -> null  // not a book tool — caller handles
         }
     }
@@ -533,5 +539,155 @@ object BookTools {
         val msg = "Exported $exported chapters to: ${outFile.absolutePath}" +
             if (skipped > 0) "\n($skipped chapters were not cached and skipped — open them first to fetch.)" else ""
         ToolExecutionResult(msg, true)
+    }
+
+    // ── Batch edit + undo (v0.24-P2) ──────────────────────────────────────
+
+    private fun batchEditChapterDefinition() = AgentToolDefinition(
+        name = "book_batch_edit_chapter",
+        description = "Batch find-and-replace across multiple chapters in one transaction. " +
+            "A snapshot of the affected chapters is saved to .backup/<timestamp>/ before any change, " +
+            "so you can roll back with book_undo. dry_run is forced on by default (preview only) — " +
+            "review the preview, then call again with dry_run=false to apply.",
+        parameters = mapOf(
+            "tool_title" to toolTitle("batch_edit"),
+            "chapters" to AgentToolParam("string", "Which chapters: 'all', a comma list like '1,3,5', or a range '2-7'. For source-cache books only cached chapters are touched."),
+            "find" to AgentToolParam("string", "Text to find (exact match). Required."),
+            "replace" to AgentToolParam("string", "Replacement text. Empty string deletes the matched text."),
+            "replaceAll" to AgentToolParam("boolean", "If true, replace ALL occurrences in each chapter; if false, first only"),
+            "dry_run" to AgentToolParam("boolean", "Preview only (default true). Set false to actually apply after reviewing."),
+        ),
+        required = listOf("tool_title", "chapters", "find", "replace"),
+        propertyOrdering = listOf("tool_title", "chapters", "find", "replace", "replaceAll", "dry_run"),
+    )
+
+    private fun undoDefinition() = AgentToolDefinition(
+        name = "book_undo",
+        description = "Roll back the most recent book_batch_edit_chapter (or other bulk chapter edit) by restoring the snapshot saved to .backup/. Reverts every chapter changed in that operation.",
+        parameters = mapOf("tool_title" to toolTitle("undo")),
+        required = listOf("tool_title"),
+        propertyOrdering = listOf("tool_title"),
+    )
+
+    private suspend fun batchEditChapter(bookId: String, argsJson: String, context: Context): ToolExecutionResult {
+        val args = JSONObject(argsJson)
+        val spec = args.optString("chapters", "all")
+        val find = args.optString("find", "")
+        val replace = args.optString("replace", "")
+        val replaceAll = args.optBoolean("replaceAll", false)
+        val dryRun = args.optBoolean("dry_run", true) // forced default true
+        if (find.isBlank()) return ToolExecutionResult("Error: 'find' cannot be empty", false)
+        val isSrc = BookSourceRepository.isSourceBook(bookId, context)
+        val nums = parseChapterNums(spec, bookId, context, isSrc)
+        if (nums.isEmpty()) return ToolExecutionResult("Error: no chapters matched by '$spec'", false)
+
+        val previews = mutableListOf<String>()
+        var totalHits = 0
+        for (num in nums) {
+            if (isSrc) BookSourceRepository.ensureChapterCached(bookId, num, context)
+            val content = BookRepository.readChapter(bookId, num, context) ?: continue
+            val count = countOccurrences(content, find, replaceAll)
+            if (count > 0) {
+                totalHits += count
+                previews.add("ch${"%03d".format(num)}: $count 处命中")
+            }
+        }
+        if (dryRun) {
+            val sb = StringBuilder()
+            sb.appendLine("【预览 dry_run】将对 ${nums.size} 章执行替换，共 $totalHits 处命中：")
+            previews.forEach { sb.appendLine("  $it") }
+            if (totalHits == 0) sb.appendLine("（没有找到匹配，无需修改）")
+            sb.appendLine("确认无误后调用 book_batch_edit_chapter 并设置 dry_run=false 执行。")
+            return ToolExecutionResult(sb.toString().trimEnd(), true)
+        }
+        if (totalHits == 0) return ToolExecutionResult("No matches found in the selected chapters; nothing changed.", true)
+
+        if (!snapshotChapters(bookId, nums, context)) {
+            return ToolExecutionResult("Error: failed to create backup snapshot; aborting to avoid data loss.", false)
+        }
+        var applied = 0
+        for (num in nums) {
+            if (isSrc) BookSourceRepository.ensureChapterCached(bookId, num, context)
+            val r = BookRepository.editChapter(bookId, num, find, replace, replaceAll, context)
+            if (!r.startsWith("Error")) applied++
+        }
+        return ToolExecutionResult("Batch edit applied to $applied/${nums.size} chapters ($totalHits replacements). Snapshot saved — call book_undo to roll back.", true)
+    }
+
+    private suspend fun undoLastBatch(bookId: String, context: Context): ToolExecutionResult {
+        val hostBase = PRootKernel.resolveSessionHostPath("", BookRepository.booksBasePath(), context)
+            ?: return ToolExecutionResult("Error: cannot resolve book dir", false)
+        val bookDir = File(hostBase, bookId)
+        val backupRoot = File(bookDir, ".backup")
+        if (!backupRoot.isDirectory) return ToolExecutionResult("Error: no backup snapshot found for this book.", false)
+        val latest = File(backupRoot, "latest.txt").let { if (it.exists()) it.readText().trim() else null }
+            ?: backupRoot.listFiles { f -> f.isDirectory }?.maxByOrNull { it.name }?.name
+            ?: return ToolExecutionResult("Error: no backup snapshot found.", false)
+        val backupChapters = File(File(backupRoot, latest), "chapters")
+        if (!backupChapters.isDirectory) return ToolExecutionResult("Error: backup snapshot '$latest' is empty.", false)
+        val chaptersDir = File(bookDir, "chapters")
+        if (!chaptersDir.isDirectory) return ToolExecutionResult("Error: chapters directory missing.", false)
+        var restored = 0
+        backupChapters.listFiles { f -> f.extension == "md" }?.forEach { src ->
+            val dst = File(chaptersDir, src.name)
+            try { src.copyTo(dst, overwrite = true); restored++ } catch (_: Exception) {}
+        }
+        return ToolExecutionResult("Restored $restored chapters from backup snapshot '$latest'.", true)
+    }
+
+    private fun countOccurrences(content: String, find: String, replaceAll: Boolean): Int {
+        if (find.isEmpty()) return 0
+        var idx = 0
+        var count = 0
+        while (true) {
+            val i = content.indexOf(find, idx)
+            if (i < 0) break
+            count++
+            idx = i + find.length
+            if (!replaceAll) break
+        }
+        return count
+    }
+
+    private suspend fun parseChapterNums(spec: String, bookId: String, context: Context, isSrc: Boolean): List<Int> {
+        val s = spec.trim()
+        if (s == "all") {
+            return if (isSrc) {
+                BookSourceRepository.listSourceChapters(bookId, context).filter { it.cached }.map { it.num }
+            } else {
+                BookRepository.listChapters(bookId, context).map { it.num }
+            }
+        }
+        val nums = mutableListOf<Int>()
+        s.split(",").forEach { part ->
+            val p = part.trim()
+            if (p.contains("-")) {
+                val (a, b) = p.split("-", limit = 2)
+                val lo = a.trim().toIntOrNull()
+                val hi = b.trim().toIntOrNull()
+                if (lo != null && hi != null) for (n in lo..hi) nums.add(n)
+            } else {
+                p.toIntOrNull()?.let { nums.add(it) }
+            }
+        }
+        return nums.distinct().sorted()
+    }
+
+    private fun snapshotChapters(bookId: String, nums: List<Int>, context: Context): Boolean {
+        val hostBase = PRootKernel.resolveSessionHostPath("", BookRepository.booksBasePath(), context) ?: return false
+        val bookDir = File(hostBase, bookId)
+        val chaptersDir = File(bookDir, "chapters")
+        if (!chaptersDir.isDirectory) return false
+        val ts = Instant.now().toString().replace(":", "-")
+        val backupDir = File(File(bookDir, ".backup").also { it.mkdirs() }, ts)
+        val backupChapters = File(backupDir, "chapters").also { it.mkdirs() }
+        var ok = true
+        for (num in nums) {
+            val src = File(chaptersDir, "ch${"%03d".format(num)}.md")
+            if (!src.exists()) continue
+            try { src.copyTo(File(backupChapters, src.name), overwrite = true) } catch (_: Exception) { ok = false }
+        }
+        try { File(bookDir, ".backup/latest.txt").writeText(ts) } catch (_: Exception) {}
+        return ok
     }
 }
