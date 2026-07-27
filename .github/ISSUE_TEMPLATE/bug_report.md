@@ -14,10 +14,10 @@ labels: ["bug", "triage"]
 
 | Field | Value |
 |-------|-------|
-| Platform / 平台 | <!-- iOS / Android --> |
-| OS Version / 系统版本 | <!-- e.g. iOS 18.4.1 / Android 15 --> |
+| Platform / 平台 | <!-- Android --> |
+| OS Version / 系统版本 | <!-- e.g. Android 15 --> |
 | Minis Version / 应用版本 | <!-- e.g. 1.2.3 (build 456) --> |
-| Device Model / 设备型号 | <!-- e.g. iPhone 16 Pro / Pixel 9 --> |
+| Device Model / 设备型号 | <!-- e.g. Pixel 9 --> |
 
 ## 🔁 Steps to Reproduce / 重现步骤
 

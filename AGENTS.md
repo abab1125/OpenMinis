@@ -118,12 +118,12 @@ cd src/android && ./gradlew :app:assembleDebug --no-daemon
 
 ## Hermes 网关透传（本 fork 定制）
 
-**模式 B**：OpenMinis 当 Hermes（Mac 端 agent）的消息通道，消息透传到 Hermes
+**模式 B**：OpenMinis 当 Hermes（桌面端 agent）的消息通道，消息透传到 Hermes
 Gateway，叶赫赫的 skills/memory/tools 全在 Hermes 侧跑，OpenMinis 只当 UI 壳。
 
 **架构**：
 ```
-手机 OpenMinis → HTTPS → 阿里云 nginx(/hermes/api/) → SSH 反向隧道 → 本机 Hermes:8642
+手机 OpenMinis → HTTPS → 自建网关（反向代理 → 隧道 → 本地 Hermes 守护进程 :8642）
 ```
 
 **代码结构**（低耦合，独立模块）：

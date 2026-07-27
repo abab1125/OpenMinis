@@ -19,11 +19,11 @@ what converge on the product.**
 
 Official website: **[openminis.app](https://openminis.app)**
 
-<a href="https://github.com/OpenMinis/OpenMinis/releases">
+<a href="https://github.com/abab1125/OpenMinis/releases">
   <img alt="Get the APK on GitHub" height="48" src="assets/badge-android.svg" />
 </a>
 
-![Minis on iOS — deep research, chat, agent runtime, integrations, iCloud sync and granular permissions](assets/screenshots.png)
+![Minis on Android — deep research, chat, agent runtime, integrations and granular permissions](assets/screenshots.png)
 
 ---
 
@@ -33,7 +33,7 @@ Official website: **[openminis.app](https://openminis.app)**
 |---|---|
 | **Bring your own model** | Claude, GPT, Gemini and other providers, via your own API keys or account sign-in. |
 | **A real Linux shell** | A sandboxed Alpine Linux environment runs on-device — the agent can install packages, run scripts, and work with real files. |
-| **Device integration** | Health, Calendar, Reminders, Contacts, HomeKit, Bluetooth, Clipboard, Media, Alarms and more, exposed to the agent as tools. |
+| **Device integration** | Health, Calendar, Reminders, Contacts, Bluetooth, Clipboard, Media, Alarms and more, exposed to the agent as tools. |
 | **Browser automation** | The agent can browse and interact with the web on your behalf. |
 | **Skills & memory** | Extensible skills plus persistent memory across sessions. |
 | **Workspaces** | Organise work into separate contexts, addressable via `minis://workspace/`. |
@@ -46,15 +46,15 @@ Official website: **[openminis.app](https://openminis.app)**
 A few things people actually use it for:
 
 - **Photograph a meal, log the nutrition** — Minis identifies the dishes, estimates
-  calories and macros, and writes them to Apple Health.
+  calories and macros, and writes them to Health Connect.
 - **Wake up to your timeline** — Shortcuts triggers Minis to fetch your X timeline,
   summarise it, synthesise speech, and play it as your alarm.
 - **Turn group chatter into tasks** — pull messages from a Telegram group, extract
-  bugs and action items, deduplicate them, and file them into Apple Reminders.
+  bugs and action items, deduplicate them, and file them into your reminders.
 - **Mount your Obsidian vault** — research, clean up and write Markdown notes back
   into the vault as a normal workspace.
 - **Share anything into a calendar event** — send a page or message to Minis via the
-  iOS Share Sheet and it creates the event, time and place included.
+  Android share sheet and it creates the event, time and place included.
 
 **→ [OpenMinis/AwesomeMinis](https://github.com/OpenMinis/AwesomeMinis)** — a curated,
 community-contributed collection of use cases and workflows across health,
@@ -101,21 +101,14 @@ media downloads, health analysis, cloud APIs and more.
 
 ## Beta programme
 
-App Store releases can lag behind: every update waits on review, and we hold
-builds back when stability warrants it. The TestFlight build is where fixes
-and new features land first.
-
-**→ [Join the TestFlight beta](https://testflight.apple.com/join/3BdkA5c3)**
-
-On Android, the [releases page](https://github.com/OpenMinis/OpenMinis/releases)
+The [releases page](https://github.com/abab1125/OpenMinis/releases)
 always carries the latest APK.
 
 ---
 
 ## Building from source
 
-Minis ships a Linux sandbox inside the app, so the native dependencies (iSH on
-iOS, PRoot on Android, FFmpeg, LAME) and the Alpine rootfs are **built from
+Minis ships a Linux sandbox inside the app, so the native dependencies (PRoot on Android, FFmpeg, LAME) and the Alpine rootfs are **built from
 source** rather than committed as binaries.
 
 **→ See [BUILDING.md](BUILDING.md) for the full first-build guide.**
@@ -123,7 +116,7 @@ source** rather than committed as binaries.
 The short version:
 
 ```sh
-git clone --recurse-submodules https://github.com/OpenMinis/OpenMinis.git
+git clone --recurse-submodules https://github.com/abab1125/OpenMinis.git
 cd OpenMinis
 
 # Android — needs NDK r28+
@@ -156,8 +149,6 @@ terms, is in [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
 
 **The sandbox** — the heart of the product:
 
-- **[iSH](https://github.com/ish-app/ish)** (GPLv3) — Linux usermode emulation on
-  iOS. We run [an ARM64 fork](https://github.com/OpenMinis/ish-arm64).
 - **[PRoot](https://github.com/termux/proot)** (GPLv2) — user-space chroot for the
   Android sandbox, via [our fork](https://github.com/OpenMinis/proot);
   **[talloc](https://talloc.samba.org)** (LGPLv3+) underpins it.
@@ -166,12 +157,6 @@ terms, is in [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
 **Media & text** — [FFmpeg](https://ffmpeg.org) (LGPL-2.1+),
 [LAME](https://lame.sourceforge.io) (LGPL), [cppjieba](https://github.com/yanyiwu/cppjieba) (MIT),
 [KaTeX](https://katex.org) (MIT).
-
-**iOS** — [SwiftAnthropic](https://github.com/jamesrochabrun/SwiftAnthropic),
-[SwiftMath](https://github.com/mgriebling/SwiftMath),
-[RealTimeCutVADLibrary](https://github.com/helloooideeeeea/RealTimeCutVADLibrary) (all MIT),
-[swift-cmark](https://github.com/swiftlang/swift-cmark) (BSD-2-Clause), and the
-Apple / Swift Server Workgroup packages (Apache-2.0).
 
 **Android** — [AndroidX & Jetpack Compose](https://developer.android.com/jetpack),
 [OkHttp](https://square.github.io/okhttp/), [Coil](https://coil-kt.github.io/coil/),
@@ -186,8 +171,7 @@ Apple / Swift Server Workgroup packages (Apache-2.0).
 
 OpenMinis is licensed under the **[GNU General Public License v3.0](LICENSE)**.
 
-The app links GPL-licensed components — [iSH](https://github.com/OpenMinis/ish-arm64)
-(GPLv3) and [PRoot](https://github.com/OpenMinis/proot) (GPLv2) — so the combined
+The app links GPL-licensed components — [PRoot](https://github.com/OpenMinis/proot) (GPLv2) — so the combined
 work is distributed under GPLv3. Bundled third-party licenses are listed in
 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
 
@@ -197,10 +181,9 @@ work is distributed under GPLv3. Bundled third-party licenses are listed in
 
 - **Telegram**: [Join the group](https://t.me/+2NzhOJuzRyI1YmM1)
 - **Issues**: Bug reports, feature requests and discussion via
-  [GitHub Issues](https://github.com/OpenMinis/OpenMinis/issues)
+  [GitHub Issues](https://github.com/abab1125/OpenMinis/issues)
 
-This repository is a mirror of a private development tree, so it **does not
-accept pull requests** — there is nowhere for them to land. Issues are the way
-to shape the product, and [AwesomeMinis](https://github.com/OpenMinis/AwesomeMinis)
-and [MinisSkills](https://github.com/OpenMinis/MinisSkills) both do take
-contributions. See [CONTRIBUTING.md](CONTRIBUTING.md).
+This is a maintained fork; please open **Issues** for bugs and requests, and
+PRs are welcome too. Community skills and workflows live in
+[AwesomeMinis](https://github.com/OpenMinis/AwesomeMinis) and
+[MinisSkills](https://github.com/OpenMinis/MinisSkills). See [CONTRIBUTING.md](CONTRIBUTING.md).

@@ -983,11 +983,11 @@ Toggle whether a model group is exposed to the in-shell `minis-model-use` agent 
 
 ## Chat Automation Methods
 
-These methods drive the same chat flows the iOS Shortcuts intents expose (`SendPromptIntent`, `RetryRunIntent`, `GetSessionStatusIntent`, `ListSessionsIntent`, `FollowUpSessionIntent`), wired for remote automation over JSON-RPC.
+These methods drive the same chat flows the Shortcuts intents expose (`SendPromptIntent`, `RetryRunIntent`, `GetSessionStatusIntent`, `ListSessionsIntent`, `FollowUpSessionIntent`), wired for remote automation over JSON-RPC.
 
 Shared conventions:
 
-- **Attachments** are passed as an array of `{name, data, mime?}` objects, where `data` is base64-encoded bytes. `name` should include a file extension (e.g. `"photo.jpg"`) — the server uses the extension to infer MIME when `mime` is omitted, matching the iOS `IntentFile` filename-resolution path. Supported categories: images, videos, arbitrary files (same UTTypes as the Shortcuts intent: `public.image`, `public.movie`, `public.data`).
+- **Attachments** are passed as an array of `{name, data, mime?}` objects, where `data` is base64-encoded bytes. `name` should include a file extension (e.g. `"photo.jpg"`) — the server uses the extension to infer MIME when `mime` is omitted, matching the `IntentFile` filename-resolution path. Supported categories: images, videos, arbitrary files (same UTTypes as the Shortcuts intent: `public.image`, `public.movie`, `public.data`).
 - **Async vs sync**: every send/retry method accepts a `wait` boolean. `wait=false` (default) returns immediately with `status: "Running"` and lets the agent run in the background; `wait=true` blocks until `isProcessing` flips to false and returns the full response text.
 - **Session IDs** are the same opaque strings used by `ChatStore` and the Shortcuts intents. Resolve from `chat.sessions.list` or from the `sessionId` returned by `chat.prompt`.
 - **Model selection**: `chat.prompt` and `chat.retry` accept either `modelEntryId` (a specific model entry — e.g. a concrete `deepseek-v4-flash` on a particular provider instance) or `modelGroupId` (a model group — the app resolves the member via the group's routing strategy). If both are omitted, the session's existing binding is used; for a brand-new session without a user-set default, the global default group is used (same as tapping "Send" in the UI). Discover valid IDs via `chat.models.list`.

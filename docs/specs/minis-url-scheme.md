@@ -5,7 +5,7 @@
 
 ## 1. Overview
 
-`minis://` is a **session-scoped** unified resource locator for persistent, addressable resources within the Minis ecosystem. It bridges three layers — the AI agent, the iSH Linux shell, and the iOS host app — with a single URL that works in tool results, Markdown rendering, and inter-component references.
+`minis://` is a **session-scoped** unified resource locator for persistent, addressable resources within the Minis ecosystem. It bridges three layers — the AI agent, the Linux sandbox shell, and the host app — with a single URL that works in tool results, Markdown rendering, and inter-component references.
 
 **`minis://` URLs are inherently session-bound.** Every resolution, read, write, and render operation is performed in the context of the current active session. There is no cross-session resource visibility — a `minis://attachments/photo.png` in Session A and the same URL in Session B refer to completely independent files. The agent, the shell, and the UI all see only the resources belonging to the active session.
 

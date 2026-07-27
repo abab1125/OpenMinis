@@ -13,11 +13,11 @@ ordered by dependency, and skipping one produces confusing link errors later.
 
 ## Common setup
 
-Clone with submodules — the iSH and PRoot forks are submodules, and a clone
-without them will fail at the native build step:
+Clone with submodules — the PRoot fork is a submodule, and a clone
+without it will fail at the native build step:
 
 ```sh
-git clone --recurse-submodules https://github.com/OpenMinis/OpenMinis.git
+git clone --recurse-submodules https://github.com/abab1125/OpenMinis.git
 cd OpenMinis
 
 # Already cloned without --recurse-submodules?
@@ -26,7 +26,6 @@ git submodule update --init --recursive
 
 | Submodule | Repository | Used by |
 |---|---|---|
-| `deps/ish` | [OpenMinis/ish-arm64](https://github.com/OpenMinis/ish-arm64) | iOS sandbox kernel |
 | `deps/proot` | [OpenMinis/proot](https://github.com/OpenMinis/proot) | Android sandbox |
 
 ### Build-time customization
@@ -125,20 +124,8 @@ required to produce one locally.
 
 ## Troubleshooting
 
-**`deps/ish` or `deps/proot` is empty** — the submodules were not initialised:
-`git submodule update --init --recursive`.
-
-**iOS: `Undefined symbols … _vstats_version` / `symbol(s) not found`** — FFmpeg
-was not built, or was built for a different architecture than the one you are
-linking. Rerun `./deps/build_ffmpeg.sh` and build for a device destination.
-
-**iOS: `linking in object file built for 'iOS'` on a simulator build** — see
-the simulator note above.
-
-**iOS: MP3 encoding unavailable** — `build_lame.sh` did not run before
-`build_ffmpeg.sh`. Rerun both in order.
-
-**Android: `Android NDK not found`** — set `ANDROID_NDK_HOME` to your NDK r28+
+**`deps/proot` is empty** — the submodule was not initialised:
+`git submodule update --init --recursive`.**Android: `Android NDK not found`** — set `ANDROID_NDK_HOME` to your NDK r28+
 installation, e.g.
 `export ANDROID_NDK_HOME=~/Library/Android/sdk/ndk/28.0.12433566`.
 
@@ -153,7 +140,7 @@ from the customization file; see [Build-time customization](#build-time-customiz
 
 ## Licensing note
 
-Minis is **GPLv3** because it links iSH (GPLv3) and PRoot (GPLv2). If you
+Minis is **GPLv3** because it links PRoot (GPLv2). If you
 change how the native dependencies are built, keep FFmpeg on its LGPL
 configuration and preserve the vendored `LICENSE` files. See
 [LICENSE](LICENSE) and [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).

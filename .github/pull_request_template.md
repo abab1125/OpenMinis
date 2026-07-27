@@ -1,17 +1,13 @@
 <!--
   Please read before submitting.
 
-  This repository does not accept pull requests. It is a mirror: development
-  happens in a private tree and is published here on each release, so there is
-  nowhere for a PR to land — it would be overwritten by the next sync.
+  This is a maintained fork (abab1125/OpenMinis). PRs are welcome; Issues are the
+  preferred channel for bugs and feature requests.
 
-  This is not about the quality of your work. If you open one anyway, we will
-  close it with a link to CONTRIBUTING.md.
-
-  What helps instead:
+  What helps:
 
     • Bugs and feature requests → open an issue
-      https://github.com/OpenMinis/OpenMinis/issues
+      https://github.com/abab1125/OpenMinis/issues
 
     • Use cases and workflows   → OpenMinis/AwesomeMinis  (accepts PRs)
     • Skills                    → OpenMinis/MinisSkills   (accepts PRs)
