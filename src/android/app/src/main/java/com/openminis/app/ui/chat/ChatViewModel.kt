@@ -1563,6 +1563,64 @@ class ChatViewModel(
     internal val _mentionSelectedIndex = MutableStateFlow(-1)
     val mentionSelectedIndex: StateFlow<Int> = _mentionSelectedIndex.asStateFlow()
 
+    // ── @-mention content search (T-mention-content-search) ──────────────
+    // The name-based matcher above can't answer "which file *talks about* X".
+    // This explicit, user-triggered search reuses ContentSearchTool.search()
+    // (same engine the agent's content_search tool uses — one implementation,
+    // no drift) and surfaces grep-style hits in the mention popup. Explicit
+    // trigger, not per-keystroke: a full-content scan per keystroke would
+    // thrash IO for little benefit on mobile.
+    internal val _mentionContentResults =
+        MutableStateFlow<List<ContentSearchTool.Hit>>(emptyList())
+    val mentionContentResults: StateFlow<List<ContentSearchTool.Hit>> =
+        _mentionContentResults.asStateFlow()
+
+    internal val _isMentionContentSearching = MutableStateFlow(false)
+    val isMentionContentSearching: StateFlow<Boolean> = _isMentionContentSearching.asStateFlow()
+
+    private var mentionContentSearchJob: Job? = null
+
+    /** Run a full-content search for the current mention filter (explicit tap). */
+    fun runMentionContentSearch() {
+        val query = _mentionFilter.value.trim()
+        if (query.isEmpty()) return
+        mentionContentSearchJob?.cancel()
+        mentionContentSearchJob = viewModelScope.launch(Dispatchers.IO) {
+            _isMentionContentSearching.value = true
+            try {
+                val sid = realSessionId.ifEmpty { sessionId }
+                val roots = listOf(
+                    "/var/minis/skills",
+                    "/var/minis/workspace/$sid",
+                    "/var/minis/attachments/$sid",
+                    "/var/minis/shared",
+                    "/var/minis/memory",
+                    "/var/minis/books",
+                )
+                val result = ContentSearchTool.search(
+                    roots = roots,
+                    sessionId = sid,
+                    context = context,
+                    query = query,
+                    useRegex = false,
+                    caseSensitive = false,
+                    limit = 20,
+                )
+                _mentionContentResults.value = result?.first ?: emptyList()
+            } finally {
+                _isMentionContentSearching.value = false
+            }
+        }
+    }
+
+    /** Reset content-search state (menu dismissed or filter changed). */
+    fun clearMentionContentSearch() {
+        mentionContentSearchJob?.cancel()
+        mentionContentSearchJob = null
+        if (_mentionContentResults.value.isNotEmpty()) _mentionContentResults.value = emptyList()
+        if (_isMentionContentSearching.value) _isMentionContentSearching.value = false
+    }
+
     val currentModelSupportsReasoning: Boolean
         get() = currentModel?.supportsReasoning == true
 

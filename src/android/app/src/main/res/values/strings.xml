@@ -76,6 +76,9 @@
     <!-- T4: @ file-mention picker -->
     <string name="mention_scanning">Scanning files…</string>
     <string name="mention_no_match">No matching files</string>
+    <string name="mention_content_search">Search file contents for “%1$s”</string>
+    <string name="mention_content_searching">Searching file contents…</string>
+    <string name="mention_content_no_match">No content matches</string>
 
     <!-- T13: Resume banner (shown at the bottom of the message list when an interrupted agent loop can be resumed) -->
     <string name="resume_banner_title">Interrupted — tap Resume to continue</string>

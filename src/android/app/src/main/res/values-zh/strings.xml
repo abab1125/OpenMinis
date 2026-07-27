@@ -67,6 +67,9 @@
     <string name="permissions_category_system">跟随系统</string>
     <string name="mention_scanning">正在扫描文件…</string>
     <string name="mention_no_match">没有匹配的文件</string>
+    <string name="mention_content_search">在文件内容中搜索“%1$s”</string>
+    <string name="mention_content_searching">正在搜索文件内容…</string>
+    <string name="mention_content_no_match">内容无匹配</string>
     <string name="resume_banner_title">已中断 - 点击「继续」以恢复</string>
     <string name="resume_action">继续</string>
     <string name="search_chats_placeholder">搜索会话…</string>

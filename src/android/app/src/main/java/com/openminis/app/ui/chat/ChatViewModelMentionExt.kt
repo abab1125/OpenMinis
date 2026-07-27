@@ -120,6 +120,9 @@ internal fun ChatViewModel.updateMentionMenuState(text: String, caret: Int) {
     }
     val filter = text.substring(anchor + 1, safeCaret)
     _mentionAnchor.value = anchor
+    // Content-search results are pinned to the filter they were run against;
+    // any filter change invalidates them (T-mention-content-search).
+    if (_mentionFilter.value != filter) clearMentionContentSearch()
     _mentionFilter.value = filter
     if (!_showMentionMenu.value) {
         _showMentionMenu.value = true
@@ -148,6 +151,27 @@ internal fun ChatViewModel.dismissMentionMenu() {
     _mentionFilter.value = ""
     _mentionAnchor.value = -1
     _mentionSelectedIndex.value = -1
+    clearMentionContentSearch()
+}
+
+/**
+ * Commit a content-search hit into the composer. Same token-replacement
+ * semantics as [selectMention] — we wrap the hit's path in a synthetic
+ * [FileMentionIndex.Entry] since selectMention only consumes `linuxPath`.
+ */
+internal fun ChatViewModel.selectMentionContentHit(
+    hit: com.openminis.app.tools.ContentSearchTool.Hit,
+    currentText: String,
+    currentCaret: Int,
+): Pair<String, Int> {
+    val synthetic = FileMentionIndex.Entry(
+        linuxPath = hit.linuxPath,
+        scope = FileMentionIndex.Scope.WORKSPACE,
+        mountName = null,
+        modifiedAt = 0L,
+        isDirectory = false,
+    )
+    return selectMention(synthetic, currentText, currentCaret)
 }
 
 /**

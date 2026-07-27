@@ -4105,6 +4105,122 @@ fun ChatScreen(
                                 .background(ChatColors.inputBg, RoundedCornerShape(10.dp))
                                 .border(0.5.dp, ChatColors.toolBorder, RoundedCornerShape(10.dp)),
                         ) {
+                            // T-mention-content-search: explicit full-text search
+                            // over file CONTENTS — the list below only matches
+                            // names. One tap runs the same engine as the agent's
+                            // content_search tool; hits replace the token like a
+                            // normal mention row.
+                            val mentionFilterText by viewModel.mentionFilter.collectAsState()
+                            val mentionContentHits by viewModel.mentionContentResults.collectAsState()
+                            val isContentSearching by viewModel.isMentionContentSearching.collectAsState()
+                            var contentSearchRan by remember(mentionFilterText) {
+                                androidx.compose.runtime.mutableStateOf(false)
+                            }
+                            if (mentionFilterText.isNotBlank()) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable(enabled = !isContentSearching) {
+                                            contentSearchRan = true
+                                            viewModel.runMentionContentSearch()
+                                        }
+                                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Search,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Text(
+                                        text = stringResource(
+                                            if (isContentSearching) R.string.mention_content_searching
+                                            else R.string.mention_content_search,
+                                            mentionFilterText,
+                                        ),
+                                        fontSize = 13.sp,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                    if (isContentSearching) {
+                                        androidx.compose.material3.CircularProgressIndicator(
+                                            modifier = Modifier.size(14.dp),
+                                            strokeWidth = 1.5.dp,
+                                            color = ChatColors.secondaryText,
+                                        )
+                                    }
+                                }
+                                if (contentSearchRan && !isContentSearching) {
+                                    if (mentionContentHits.isEmpty()) {
+                                        Text(
+                                            text = stringResource(R.string.mention_content_no_match),
+                                            fontSize = 12.sp,
+                                            color = ChatColors.secondaryText,
+                                            modifier = Modifier.padding(horizontal = 38.dp, vertical = 4.dp),
+                                        )
+                                    } else {
+                                        LazyColumn(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .heightIn(max = 150.dp),
+                                        ) {
+                                            itemsIndexed(
+                                                mentionContentHits,
+                                                key = { i, h -> "${h.linuxPath}:${h.lineNo}:$i" },
+                                            ) { _, hit ->
+                                                Row(
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .clickable {
+                                                            val (newText, newCaret) = viewModel.selectMentionContentHit(
+                                                                hit,
+                                                                currentText = inputFieldValue.text,
+                                                                currentCaret = inputFieldValue.selection.end,
+                                                            )
+                                                            viewModel.setInputText(newText)
+                                                            inputFieldValue = androidx.compose.ui.text.input.TextFieldValue(
+                                                                text = newText,
+                                                                selection = androidx.compose.ui.text.TextRange(newCaret),
+                                                            )
+                                                        }
+                                                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.Description,
+                                                        contentDescription = null,
+                                                        tint = ChatColors.secondaryText,
+                                                        modifier = Modifier.size(14.dp),
+                                                    )
+                                                    Spacer(modifier = Modifier.width(10.dp))
+                                                    Column(modifier = Modifier.weight(1f)) {
+                                                        Text(
+                                                            text = hit.linuxPath.removePrefix("/var/minis/") + ":${hit.lineNo}",
+                                                            fontSize = 12.sp,
+                                                            fontWeight = FontWeight.Medium,
+                                                            color = ChatColors.primaryText,
+                                                            maxLines = 1,
+                                                            overflow = TextOverflow.Ellipsis,
+                                                        )
+                                                        Text(
+                                                            text = hit.excerpt,
+                                                            fontSize = 11.sp,
+                                                            color = ChatColors.secondaryText,
+                                                            maxLines = 1,
+                                                            overflow = TextOverflow.Ellipsis,
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                HorizontalDivider(color = ChatColors.toolBorder, thickness = 0.5.dp)
+                            }
                             if (mentionEntries.isEmpty()) {
                                 Row(
                                     modifier = Modifier
