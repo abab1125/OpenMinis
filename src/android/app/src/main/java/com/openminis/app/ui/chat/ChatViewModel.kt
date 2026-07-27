@@ -7447,12 +7447,19 @@ class ChatViewModel(
                     errorMessage = errMsgForDetector,
                     toolCallId = id,
                 )
-                val outputForLLM = if (postRecord.level == Level.WARNING && postRecord.message != null) {
-                    AppLogger.debug("ChatViewModel",
-                        "appending loop-warning to tool result name=$name key=${postRecord.warningKey}")
-                    "${result.output}\n\n${postRecord.message}"
-                } else {
-                    result.output
+                val outputForLLM = buildString {
+                    append(result.output)
+                    if (postRecord.level == Level.WARNING && postRecord.message != null) {
+                        AppLogger.debug("ChatViewModel",
+                            "appending loop-warning to tool result name=$name key=${postRecord.warningKey}")
+                        append("\n\n").append(postRecord.message)
+                    }
+                    // [v0.24-P3] On failure, attach a structured self-heal hint
+                    // (error category + suggested fix) so the model can recover
+                    // without burning another identical failed call.
+                    if (!result.success) {
+                        buildFailureHint(name, result.output)?.let { append("\n\n").append(it) }
+                    }
                 }
 
                 val blockIdx = allToolBlocks.indexOfFirst { it.id == id }
@@ -8532,6 +8539,36 @@ class ChatViewModel(
         return entity.id
     }
 
+    /**
+     * [v0.24-P3] Categorize a failed tool result and append a structured
+     * self-heal hint (error category + suggested fix) so the model can recover
+     * instead of repeating the same failing call. Returns null when no useful
+     * category matches (the raw error is sent through unchanged).
+     */
+    private fun buildFailureHint(toolName: String, error: String): String? {
+        val e = error.lowercase()
+        val hint: Pair<String, String>? = when {
+            e.contains("no such file") || e.contains("does not exist") || e.contains("no such directory") ->
+                "路径不存在" to "检查文件或目录路径是否正确；用 shell_execute `ls <parent>` 确认父目录存在，路径应位于 /var/minis/ 下。"
+            e.contains("permission denied") ->
+                "权限不足" to "该路径可能只读或为系统目录；不要写入标记为只读的挂载（/var/minis/mounts）；必要时改用 /var/minis/workspace 或 /var/minis/shared。"
+            (e.contains("command not found") || (e.contains("not found") && toolName == "shell_execute")) ->
+                "命令不存在" to "该命令未安装；先 `which <cmd>` 确认，再用 `apk add <pkg>` 安装（Alpine 用 apk 而非 apt）。"
+            e.contains("syntax error") || e.contains("unexpected") || e.contains("parse error") ->
+                "语法错误" to "检查命令/脚本语法；BusyBox ash 不支持 bash 特性（globstar、brace expansion、数组）。复杂脚本建议用 file_write 写成文件后执行。"
+            e.contains("timeout") || e.contains("timed out") ->
+                "执行超时" to "任务可能耗时过长；尝试拆分任务、使用 `delay` 轮询，或增大超时后重试。"
+            e.contains("network") || e.contains("connection") || e.contains("refused") || e.contains("resolve") || e.contains("could not resolve") ->
+                "网络错误" to "检查网络连通性（curl/wget 测试）；注意 ICMP(ping) 在沙箱内被屏蔽，不可用。"
+            e.contains("out of memory") || e.contains("no space") || e.contains("disk full") || e.contains("no such device") ->
+                "资源耗尽" to "设备或沙箱磁盘/内存不足；清理大文件或缩短任务规模后重试。"
+            else -> null
+        }
+        if (hint == null) return null
+        val (category, suggestion) = hint
+        return "[自助修复] 错误类别：$category。建议：$suggestion"
+    }
+
     private fun buildSystemPrompt(): String? {
         // Cache-friendly layout: keep `base` byte-stable by stripping out anything
         // that varies per request, then append a "Runtime context" suffix at the
@@ -8691,7 +8728,16 @@ Environment variables:
 - Settings deep links: when you tell the user "go to Settings → X" or want to point them at a specific setting, prefer a Markdown link `[Label](minis://settings/<path>)` over plain prose. Available paths: providers (list), providers/<instanceId> (one provider), model-groups (incl. Agent Loop), model-groups/<groupId>, usage (token usage), skills, memory, storage, shared-folders (Shared Folders: /var/minis/{shared,skills,memory}), mount-external (Mount External Folders), logs, appearance, background, about, permissions, environments[?create_key=K&create_value=V[&create_note=N]], rootfs (also reachable as mirrors). Unknown paths fall back to Settings home, but prefer the exact path so users land where they want. These settings/action links are app deep links — render them as Markdown links in chat (same action-vs-resource rule as the minis:// section above: only /var/minis resource URLs may go to browser_use).
 - To check if a variable is set, use `[ -n "${'$'}VAR" ] && echo 'set' || echo 'not set'`. NEVER use echo ${'$'}VAR, printenv VAR, or any command that would output the actual value into the conversation context.${memorySystemSection}
 
-Scheduled tasks: crontab / at / nohup loops will stop when the app is suspended, so in-app scheduled scripts may not run as expected. For recurring tasks that must fire while the app is backgrounded, use the native alarm tool (AlarmManager) or tell the user to set up a system-level schedule (Google Calendar event, Tasker automation, etc.). (Waiting or polling WITHIN the current turn is different — that is what shell_execute `delay` chains are for, per the shell_execute notes above.)"""
+Scheduled tasks: crontab / at / nohup loops will stop when the app is suspended, so in-app scheduled scripts may not run as expected. For recurring tasks that must fire while the app is backgrounded, use the native alarm tool (AlarmManager) or tell the user to set up a system-level schedule (Google Calendar event, Tasker automation, etc.). (Waiting or polling WITHIN the current turn is different — that is what shell_execute `delay` chains are for, per the shell_execute notes above.)
+
+Plan mode (multi-step tasks):
+- For tasks with 3+ distinct steps, emit a short plan inside a <plan>...</plan> block BEFORE calling tools, so the user can see your agenda at a glance. Example:
+  <plan>
+  - [ ] Read the config file
+  - [ ] Patch the broken setting
+  - [ ] Restart the service and verify
+  </plan>
+- Mark finished steps with "- [x]" and re-emit an updated <plan> as you progress so the checklist tracks completion. Keep each item to one line. Plain "- " bullets and numbered "1. " items are also accepted. The app renders this block as a dedicated plan card — do not also narrate the same list in prose."""
 
         // Match iOS order exactly: skills → global memory → recent daily memory.
         // See ios/Agent/Chat/AIChatViewModel.swift:4375-4387. Each fragment is
