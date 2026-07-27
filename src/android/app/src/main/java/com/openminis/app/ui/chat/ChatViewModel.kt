@@ -499,6 +499,44 @@ class ChatViewModel(
     }
 
     /**
+     * book_import_source tool: import a legado-format book source (e.g. lingya)
+     * from pasted JSON or a remote URL. Sources are persisted to Room via
+     * [com.openminis.app.data.repository.BookSourceRepository] and surface on
+     * the Bookshelf's 书源 tab — they are NOT local novel projects.
+     */
+    private suspend fun executeBookImportSource(argsJson: String): ToolExecutionResult {
+        val args = JSONObject(argsJson)
+        val json = args.optString("json", "").trim()
+        val url = args.optString("url", "").trim()
+        if (json.isBlank() && url.isBlank()) {
+            return ToolExecutionResult("Error: provide 'json' (raw source JSON) or 'url'.", false)
+        }
+        val imported = withContext(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching {
+                if (url.isNotBlank()) {
+                    com.openminis.app.data.repository.BookSourceRepository.importFromUrl(url, context)
+                } else {
+                    com.openminis.app.data.repository.BookSourceRepository.importFromText(json, context)
+                }
+            }.getOrNull()
+        } ?: return ToolExecutionResult(
+            "Import failed: could not parse the source JSON or fetch the URL.",
+            false,
+        )
+        if (imported.isEmpty()) {
+            return ToolExecutionResult(
+                "No valid book source found. A source needs a non-empty 'bookSourceUrl'.",
+                false,
+            )
+        }
+        val names = imported.joinToString(", ") { it.bookSourceName }
+        return ToolExecutionResult(
+            "Imported ${imported.size} book source(s): $names. Open the 书源 tab on the Bookshelf to browse their books.",
+            true,
+        )
+    }
+
+    /**
      * Hermes-backend turn: forward [userText] to the local Hermes gateway
      * and render the streamed reply. Bypasses the local agent loop entirely
      * (tools/skills/memory run on Hermes). Lifecycle:
@@ -1057,6 +1095,11 @@ class ChatViewModel(
             add(bookCreateDefinition())
             add(bookImportDefinition())
             add(bookDeleteDefinition())
+            // book_import_source: import a legado-format book source (e.g. lingya)
+            // as a remote source. Unlike the above, it does NOT bind a local book
+            // project — imported sources live in Room and surface on the Bookshelf's
+            // "书源" tab.
+            add(bookImportSourceDefinition())
             // Novel-writing tools are injected iff a book is bound. The bound
             // book can come from the bookshelf entry route OR be picked at
             // runtime via selectBook() / the book_select tool, so we read the
@@ -1144,6 +1187,30 @@ class ChatViewModel(
         ),
         required = listOf("tool_title"),
         propertyOrdering = listOf("tool_title", "name"),
+    )
+
+    private fun bookImportSourceDefinition(): AgentToolDefinition = AgentToolDefinition(
+        name = "book_import_source",
+        description = "Import a legado-format book SOURCE (e.g. lingya) by pasting its source JSON or a URL " +
+            "to a source JSON. Imported sources are stored independently from local novel projects and " +
+            "appear on the Bookshelf's 书源 tab; opening a source lists all its books (fetched live from " +
+            "the source's exploreUrl). Pass either 'json' (raw source JSON, single object or array) or 'url'.",
+        parameters = mapOf(
+            "tool_title" to AgentToolParam(
+                "string",
+                "A concise 5-10 word summary of what this tool call does, shown to the user.",
+            ),
+            "json" to AgentToolParam(
+                "string",
+                "Raw legado source JSON (single object or array). Provide this OR 'url'.",
+            ),
+            "url" to AgentToolParam(
+                "string",
+                "URL to a legado source JSON to download and import. Provide this OR 'json'.",
+            ),
+        ),
+        required = listOf("tool_title"),
+        propertyOrdering = listOf("tool_title", "json", "url"),
     )
 
     /**
@@ -7576,6 +7643,7 @@ class ChatViewModel(
             "book_create" -> executeBookCreate(argsJson)
             "book_import" -> executeBookImport(argsJson)
             "book_delete" -> executeBookDelete(argsJson)
+            "book_import_source" -> executeBookImportSource(argsJson)
             FileReadTool.NAME -> {
                 val result = FileReadTool.execute(argsJson, activeSessionId, context)
                 // Record skill usage when SKILL.md under /var/minis/skills/<id>/ is read.
