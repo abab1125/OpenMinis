@@ -4,6 +4,10 @@ import android.content.Context
 import com.openminis.app.data.model.AgentToolDefinition
 import com.openminis.app.data.model.AgentToolParam
 import com.openminis.app.data.repository.BookRepository
+import com.openminis.app.data.repository.BookSourceRepository
+import com.openminis.app.sandbox.PRootKernel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
 /**
@@ -32,6 +36,7 @@ object BookTools {
             add(buildContextDefinition())
             add(searchDefinition())
             add(loadSkillDefinition())
+            add(exportDefinition())
         }
     }
 
@@ -44,18 +49,27 @@ object BookTools {
         sessionId: String,
         context: Context,
     ): ToolExecutionResult? {
+        // A cached source book is a real local book folder, but its chapter
+        // bodies live remotely and are fetched lazily — so route the
+        // chapter-oriented tools through the source-aware helpers below.
+        val isSrc = BookSourceRepository.isSourceBook(bookId, context)
         return when (name) {
-            "book_list_chapters" -> listChapters(bookId, context)
-            "book_read_chapter" -> readChapter(bookId, argsJson, context)
-            "book_write_chapter" -> writeChapter(bookId, argsJson, context)
-            "book_edit_chapter" -> editChapter(bookId, argsJson, context)
-            "book_delete_chapter" -> deleteChapter(bookId, argsJson, context)
+            "book_list_chapters" -> if (isSrc) listSourceChapters(bookId, context) else listChapters(bookId, context)
+            "book_read_chapter" -> if (isSrc) readSourceChapter(bookId, argsJson, context) else readChapter(bookId, argsJson, context)
+            "book_write_chapter" -> if (isSrc) writeSourceChapter(bookId, argsJson, context) else writeChapter(bookId, argsJson, context)
+            "book_edit_chapter" -> if (isSrc) editSourceChapter(bookId, argsJson, context) else editChapter(bookId, argsJson, context)
+            "book_delete_chapter" -> if (isSrc) deleteSourceChapter(bookId, argsJson, context) else deleteChapter(bookId, argsJson, context)
             "book_read_outline" -> readOutline(bookId, context)
             "book_write_outline" -> writeOutline(bookId, argsJson, context)
-            "book_reference" -> reference(bookId, argsJson, context)
-            "book_get_context" -> buildContext(bookId, argsJson, context)
+            "book_reference" -> if (isSrc) {
+                ToolExecutionResult("书源缓存书不支持 reference（角色/世界观/笔记），请用章节读写工具。", true)
+            } else {
+                reference(bookId, argsJson, context)
+            }
+            "book_get_context" -> if (isSrc) buildSourceContext(bookId, argsJson, context) else buildContext(bookId, argsJson, context)
             "book_search" -> search(bookId, argsJson, context)
             "book_load_skill" -> loadSkill(bookId, argsJson, context)
+            "book_export" -> exportBook(bookId, context)
             else -> null  // not a book tool — caller handles
         }
     }
@@ -217,6 +231,18 @@ object BookTools {
         ),
         required = listOf("tool_title", "name"),
         propertyOrdering = listOf("tool_title", "name"),
+    )
+
+    private fun exportDefinition() = AgentToolDefinition(
+        name = "book_export",
+        description = "Export the current book into a single merged text file. " +
+            "For locally-authored novels all chapters are bundled. " +
+            "For a cached source book, only chapters already fetched into the cache are exported " +
+            "(open a chapter first to fetch it; uncached chapters are skipped). " +
+            "Returns the file path inside the sandbox.",
+        parameters = mapOf("tool_title" to toolTitle("export")),
+        required = listOf("tool_title"),
+        propertyOrdering = listOf("tool_title"),
     )
 
     // ── Tool execution implementations ──────────────────────────────────
@@ -383,5 +409,129 @@ object BookTools {
             "Book-local skills are loaded automatically when the session is created.",
             true,
         )
+    }
+
+    // ── Source-book aware helpers (cached remote books) ─────────────────
+
+    private suspend fun listSourceChapters(bookId: String, context: Context): ToolExecutionResult {
+        val chapters = BookSourceRepository.listSourceChapters(bookId, context)
+        if (chapters.isEmpty()) return ToolExecutionResult("No chapters in this source book.", true)
+        val sb = StringBuilder()
+        sb.appendLine("Total: ${chapters.size} chapters (cached: ${chapters.count { it.cached }})")
+        chapters.forEach { c ->
+            val mark = if (c.cached) "" else " [未缓存]"
+            sb.appendLine("ch${"%03d".format(c.num)}: ${c.title}$mark")
+        }
+        return ToolExecutionResult(sb.toString().trimEnd(), true)
+    }
+
+    private suspend fun readSourceChapter(bookId: String, argsJson: String, context: Context): ToolExecutionResult {
+        val args = JSONObject(argsJson)
+        val num = args.optInt("num", 1)
+        val content = BookSourceRepository.readSourceChapter(bookId, num, context)
+        if (content == null) {
+            return ToolExecutionResult("Error: Chapter $num not found or cannot be fetched (check network / source).", false)
+        }
+        return ToolExecutionResult("--- ch${"%03d".format(num)} ---\n$content", true)
+    }
+
+    private suspend fun writeSourceChapter(bookId: String, argsJson: String, context: Context): ToolExecutionResult {
+        val args = JSONObject(argsJson)
+        val num = args.optInt("num", 1)
+        val title = args.optString("title", null)
+        val content = args.optString("content", "")
+        val append = args.optBoolean("append", false)
+        if (content.isBlank()) return ToolExecutionResult("Error: content cannot be empty", false)
+        // Fetch the remote body first so we don't silently drop the original
+        // when overwriting / appending.
+        BookSourceRepository.ensureChapterCached(bookId, num, context)
+        val result = BookRepository.writeChapter(bookId, num, title, content, append, context)
+        return ToolExecutionResult(result, true)
+    }
+
+    private suspend fun editSourceChapter(bookId: String, argsJson: String, context: Context): ToolExecutionResult {
+        val args = JSONObject(argsJson)
+        val num = args.optInt("num", 1)
+        val find = args.optString("find", "")
+        val replace = args.optString("replace", "")
+        val replaceAll = args.optBoolean("replaceAll", false)
+        if (find.isBlank()) return ToolExecutionResult("Error: 'find' cannot be empty", false)
+        BookSourceRepository.ensureChapterCached(bookId, num, context)
+        val result = BookRepository.editChapter(bookId, num, find, replace, replaceAll, context)
+        return ToolExecutionResult(result, !result.startsWith("Error"))
+    }
+
+    private suspend fun deleteSourceChapter(bookId: String, argsJson: String, context: Context): ToolExecutionResult {
+        val args = JSONObject(argsJson)
+        val num = args.optInt("num", 1)
+        if (num < 1) return ToolExecutionResult("Error: 'num' must be >= 1", false)
+        val deleted = BookRepository.deleteChapter(bookId, num, context)
+        return if (deleted) {
+            ToolExecutionResult("Deleted chapter $num from cache. Subsequent chapters keep their numbers.", true)
+        } else {
+            ToolExecutionResult("Chapter $num not found.", false)
+        }
+    }
+
+    private suspend fun buildSourceContext(bookId: String, argsJson: String, context: Context): ToolExecutionResult {
+        val args = JSONObject(argsJson)
+        val chapterNum = args.optInt("chapter_num", -1)
+        val chapters = BookSourceRepository.listSourceChapters(bookId, context)
+        val num = if (chapterNum > 0) chapterNum else (chapters.lastOrNull()?.num ?: 1)
+        val sb = StringBuilder()
+        val current = BookSourceRepository.readSourceChapter(bookId, num, context) ?: ""
+        sb.appendLine("=== Current Chapter (ch${"%03d".format(num)}) ===")
+        sb.appendLine(current)
+        sb.appendLine()
+        val nearStart = (num - 9).coerceAtLeast(1)
+        sb.appendLine("=== Previous Chapters (ch${"%03d".format(nearStart)} ~ ch${"%03d".format((num - 1).coerceAtLeast(1))}) ===")
+        for (n in nearStart until num) {
+            val ch = BookSourceRepository.readSourceChapter(bookId, n, context)
+            if (!ch.isNullOrBlank()) {
+                sb.appendLine("--- ch${"%03d".format(n)} ---")
+                sb.appendLine(ch)
+            }
+        }
+        sb.appendLine()
+        sb.appendLine("=== Chapter List (${chapters.size} chapters, cached ${chapters.count { it.cached }}) ===")
+        chapters.forEach { c ->
+            sb.appendLine("ch${"%03d".format(c.num)}: ${c.title}${if (c.cached) "" else " [未缓存]"}")
+        }
+        return ToolExecutionResult(sb.toString().trimEnd(), true)
+    }
+
+    private suspend fun exportBook(bookId: String, context: Context): ToolExecutionResult = withContext(Dispatchers.IO) {
+        val meta = BookRepository.loadBook(bookId, context) ?: return@withContext ToolExecutionResult("Error: book not found", false)
+        val isSrc = BookSourceRepository.isSourceBook(bookId, context)
+        val chapterNums: List<Pair<Int, Boolean>> = if (isSrc) {
+            BookSourceRepository.listSourceChapters(bookId, context).map { it.num to it.cached }
+        } else {
+            BookRepository.listChapters(bookId, context).map { it.num to true }
+        }
+        val sb = StringBuilder()
+        sb.appendLine("# ${meta.title}")
+        sb.appendLine()
+        var exported = 0
+        var skipped = 0
+        for ((num, cached) in chapterNums) {
+            if (isSrc && !cached) { skipped++; continue } // export only what's in the cache
+            val text = BookRepository.readChapter(bookId, num, context) ?: continue
+            // Drop the leading "# Title" heading; the merged file uses its own chapter markers.
+            val body = text.lines().dropWhile { it.startsWith("# ") }.drop(1).joinToString("\n").trimStart('\n')
+            sb.appendLine("## 第${num}章")
+            sb.appendLine(body)
+            sb.appendLine()
+            exported++
+        }
+        val hostDir = PRootKernel.resolveSessionHostPath("", BookRepository.booksBasePath(), context)
+            ?.let { java.io.File(it, bookId) }
+            ?: return@withContext ToolExecutionResult("Error: cannot resolve book dir", false)
+        val exportDir = java.io.File(hostDir, "export").also { it.mkdirs() }
+        val safe = meta.title.filter { it.isLetterOrDigit() || it in "_-" }.ifBlank { "book" }
+        val outFile = java.io.File(exportDir, "$safe.txt")
+        outFile.writeText(sb.toString())
+        val msg = "Exported $exported chapters to: ${outFile.absolutePath}" +
+            if (skipped > 0) "\n($skipped chapters were not cached and skipped — open them first to fetch.)" else ""
+        ToolExecutionResult(msg, true)
     }
 }

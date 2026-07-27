@@ -42,6 +42,7 @@ object BookRepository {
         val currentChapter: Int,
         val createdAt: Long,
         val updatedAt: Long,
+        val kind: String = "",       // "source-cache" for books pulled from a remote book source
     )
 
     data class BookChapter(
@@ -78,6 +79,7 @@ object BookRepository {
                 currentChapter = chapterCount,
                 createdAt = json.optLong("createdAt", jsonFile.lastModified()),
                 updatedAt = jsonFile.lastModified(),
+                kind = json.optString("kind", ""),
             )
         } catch (_: Exception) {
             null
