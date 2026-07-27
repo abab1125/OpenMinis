@@ -481,6 +481,37 @@ internal sealed class FlatChatItem {
             return h
         }
     }
+
+    /**
+     * [v0.24-P0] Collapsed card grouping a run of consecutive tool_use blocks
+     * (2+) within one assistant message. Mirrors an "ran N actions" rollup so a
+     * multi-tool turn reads as one expandable unit instead of N stacked pills.
+     * A single tool_use still renders inline as [AssistantToolUse].
+     */
+    data class AssistantToolGroup(
+        val messageId: String,
+        val blocks: List<AssistantBlock>,
+        val isLastCancelled: Boolean = false,
+    ) : FlatChatItem() {
+        override val key = "toolgroup:$messageId:${blocks.firstOrNull()?.id ?: ""}:${blocks.lastOrNull()?.id ?: ""}"
+        override val contentType = "toolgroup"
+    }
+
+    /**
+     * [v0.24-P0] A plan checklist extracted from an assistant `<plan>...</plan>`
+     * block. Rendered as a standalone card above the surrounding text so the
+     * user sees the agent's agenda. Each item tracks a checked state so a later
+     * re-emitted `<plan>` (with `- [x]`) reflects progress.
+     */
+    data class PlanItem(val text: String, val checked: Boolean)
+    data class AssistantPlan(
+        val messageId: String,
+        val items: List<PlanItem>,
+        val ordinal: Int,
+    ) : FlatChatItem() {
+        override val key = "plan:$messageId:$ordinal"
+        override val contentType = "plan"
+    }
 }
 
 /**
@@ -562,6 +593,8 @@ internal fun buildFlatChatItems(
                 isStreaming = item.isStreaming,
                 messageMarkdown = item.messageMarkdown,
             )
+            is FlatChatItem.AssistantToolGroup -> item.copy(messageId = "${item.messageId}#$n")
+            is FlatChatItem.AssistantPlan -> item.copy(messageId = "${item.messageId}#$n")
         }
     }
     for (idx in fromIndex until messages.size) {
@@ -627,10 +660,38 @@ internal fun buildFlatChatItems(
         // retryLast() re-runs the whole turn, so one button is enough.
         val lastCancelledToolId = blocks.lastOrNull { it.kind == "tool_use" && it.toolStatus == ToolBlockStatus.CANCELLED }?.id
 
+        // [v0.24-P0] Maximal runs of consecutive tool_use blocks — grouped into
+        // a single collapsible AssistantToolGroup card (see render path). A run
+        // of length 1 stays an inline AssistantToolUse.
+        val toolRuns = buildList {
+            var ri = 0
+            while (ri < blocks.size) {
+                if (blocks[ri].kind == "tool_use") {
+                    val rs = ri
+                    while (ri < blocks.size && blocks[ri].kind == "tool_use") ri++
+                    add(rs to (ri - 1))
+                } else ri++
+            }
+        }
+        // Plan-card ordinal, reset per assistant message.
+        var planOrdinal = 0
+
         blocks.forEachIndexed { index, block ->
             when (block.kind) {
                 "text" -> {
                     if (block.content.isNotEmpty()) {
+                        // [v0.24-P0] Extract a <plan>...</plan> block (if present) into a
+                        // standalone plan card; the remaining text renders normally.
+                        val (planStripped, planItems) = extractPlan(block.content)
+                        if (planItems != null) {
+                            planOrdinal++
+                            out.add(dedupe(FlatChatItem.AssistantPlan(
+                                messageId = message.id,
+                                items = planItems,
+                                ordinal = planOrdinal,
+                            )))
+                        }
+                        val textContent = if (planItems != null) planStripped else block.content
                         val isLastText = index == lastTextIdx
                         // Pattern A: split this text block's content into
                         // independent markdown fragments so each becomes its
@@ -648,7 +709,7 @@ internal fun buildFlatChatItems(
                         // paragraph re-parses per token (Pattern A jank
                         // optimization preserved). Code fences stay standalone
                         // either way.
-                        val rawFragments = splitMarkdownIntoBlockTexts(block.content)
+                        val rawFragments = splitMarkdownIntoBlockTexts(textContent)
                         // [T-android-stream-end-reflow-flicker-v18] Preserve
                         // per-fragment FlatChatItem keys across the
                         // streaming→idle boundary. Previously the trailing
@@ -688,10 +749,10 @@ internal fun buildFlatChatItems(
                             // Defensive: if the splitter returns nothing for
                             // a non-empty input (shouldn't happen), fall back
                             // to a single fragment so content isn't dropped.
-                            out.add(dedupe(FlatChatItem.AssistantMarkdownBlock(
-                                messageId = message.id,
-                                parentBlockId = block.id,
-                                rawText = block.content,
+                                out.add(dedupe(FlatChatItem.AssistantMarkdownBlock(
+                                    messageId = message.id,
+                                    parentBlockId = block.id,
+                                    rawText = textContent,
                                 blockIndex = 0,
                                 isLastBlockOfMessage = isLastText && message.isStreaming,
                                 messageIsStreaming = message.isStreaming && isLastText,
@@ -725,12 +786,28 @@ internal fun buildFlatChatItems(
                     messageId = message.id,
                     block = block,
                 )))
-                else -> out.add(dedupe(FlatChatItem.AssistantToolUse(
-                    messageId = message.id,
-                    block = block,
-                    allToolBlocks = toolPillBlocks,
-                    isLastCancelled = block.id == lastCancelledToolId,
-                )))
+                else -> {
+                    // [v0.24-P0] Group consecutive tool_use runs into one collapsible card.
+                    val run = toolRuns.firstOrNull { index in it.first..it.second }
+                    if (run != null && run.second > run.first) {
+                        if (index == run.first) {
+                            val runBlocks = blocks.subList(run.first, run.second + 1)
+                            out.add(dedupe(FlatChatItem.AssistantToolGroup(
+                                messageId = message.id,
+                                blocks = runBlocks,
+                                isLastCancelled = runBlocks.any { it.id == lastCancelledToolId },
+                            )))
+                        }
+                        // interior tool of a multi-tool run: already emitted as a group
+                    } else {
+                        out.add(dedupe(FlatChatItem.AssistantToolUse(
+                            messageId = message.id,
+                            block = block,
+                            allToolBlocks = toolPillBlocks,
+                            isLastCancelled = block.id == lastCancelledToolId,
+                        )))
+                    }
+                }
             }
         }
 
@@ -760,4 +837,38 @@ internal fun buildFlatChatItems(
         }
     }
     return out
+}
+
+/**
+ * [v0.24-P0] Pull a `<plan>...</plan>` block out of assistant text and turn it
+ * into a checklist. Returns the text with the plan removed (so it isn't also
+ * rendered as prose) and the parsed items, or null when there's no plan.
+ */
+internal fun extractPlan(text: String): Pair<String, List<FlatChatItem.PlanItem>?> {
+    val start = text.indexOf("<plan>")
+    if (start < 0) return text to null
+    val end = text.indexOf("</plan>", start)
+    if (end < 0) return text to null
+    val inner = text.substring(start + 6, end)
+    val items = inner.lineSequence()
+        .map { it.trimEnd() }
+        .filter { it.isNotBlank() }
+        .mapNotNull { line ->
+            val t = line.trim()
+            when {
+                t.startsWith("- [x]") || t.startsWith("- [X]") ->
+                    FlatChatItem.PlanItem(t.removePrefix("- [x]").removePrefix("- [X]").trim(), true)
+                t.startsWith("- [ ]") ->
+                    FlatChatItem.PlanItem(t.removePrefix("- [ ]").trim(), false)
+                t.startsWith("- ") ->
+                    FlatChatItem.PlanItem(t.removePrefix("- ").trim(), false)
+                t.matches(Regex("""^\d+[.、]\s+.+""")) ->
+                    FlatChatItem.PlanItem(t.replaceFirst(Regex("""^\d+[.、]\s+"""), ""), false)
+                else -> null
+            }
+        }
+        .toList()
+    if (items.isEmpty()) return text to null
+    val stripped = (text.substring(0, start) + text.substring(end + 7)).trim('\n', ' ').trim()
+    return stripped to items
 }

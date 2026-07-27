@@ -2932,7 +2932,8 @@ fun ChatScreen(
                     // the end.
                     val newest = flatItems.lastOrNull() ?: return@LaunchedEffect
                     if (newest !is FlatChatItem.AssistantToolUse &&
-                        newest !is FlatChatItem.AssistantTyping
+                        newest !is FlatChatItem.AssistantTyping &&
+                        newest !is FlatChatItem.AssistantToolGroup
                     ) return@LaunchedEffect
                     if (newest.key == lastTrailingPinKey) return@LaunchedEffect
                     if (userScrolledAway) return@LaunchedEffect
@@ -2968,6 +2969,8 @@ fun ChatScreen(
                     is FlatChatItem.AssistantMarkdownBlock -> grayedMap[originalMessageId(messageId)] == true
                     is FlatChatItem.AssistantThinking -> grayedMap[originalMessageId(messageId)] == true
                     is FlatChatItem.AssistantToolUse -> grayedMap[originalMessageId(messageId)] == true
+                    is FlatChatItem.AssistantToolGroup -> grayedMap[originalMessageId(messageId)] == true
+                    is FlatChatItem.AssistantPlan -> grayedMap[originalMessageId(messageId)] == true
                     is FlatChatItem.AssistantInfo -> false  // system rows never grayed
                     is FlatChatItem.AssistantTyping -> false
                     is FlatChatItem.AssistantError -> grayedMap[originalMessageId(messageId)] == true
@@ -3250,6 +3253,8 @@ fun ChatScreen(
                             when (item) {
                                 is FlatChatItem.UserBubble -> item.message.content.length
                                 is FlatChatItem.AssistantText -> item.messageMarkdown.length
+                                is FlatChatItem.AssistantToolGroup -> 0
+                                is FlatChatItem.AssistantPlan -> 0
                                 else -> 0
                             }
                         }
@@ -3505,6 +3510,17 @@ fun ChatScreen(
                                     ).show()
                                 },
                             )
+                            is FlatChatItem.AssistantToolGroup -> ToolCallGroupCard(
+                                group = item,
+                                isStreaming = isStreaming,
+                                canResume = canResume,
+                                viewModel = viewModel,
+                                onOpenTerminalWithCommand = onOpenTerminalWithCommand,
+                                safeMutate = safeMutate,
+                                tracedScrollToItem = tracedScrollToItem,
+                                context = context,
+                            )
+                            is FlatChatItem.AssistantPlan -> PlanCard(items = item.items)
                             is FlatChatItem.AssistantInfo -> FallbackInfoBlock(
                                 block = item.block,
                                 // Only the compact-divider info block should
@@ -6062,3 +6078,105 @@ private fun ThinkingLevelSheet(
 }
 
 
+/**
+ * [v0.24-P0] Collapsed card for a run of consecutive tool calls. Shows a one-
+ * line summary ("执行了 N 个操作 · X 成功 · Y 失败") that expands into the
+ * individual [ToolCallPill]s when tapped.
+ */
+internal fun ToolCallGroupCard(
+    group: FlatChatItem.AssistantToolGroup,
+    isStreaming: Boolean,
+    canResume: Boolean,
+    viewModel: ChatViewModel,
+    onOpenTerminalWithCommand: (String) -> Unit,
+    safeMutate: (() -> Unit) -> Unit,
+    tracedScrollToItem: (String, Int, Int) -> Unit,
+    context: android.content.Context,
+) {
+    val scope = rememberCoroutineScope()
+    val expanded = remember { mutableStateOf(false) }
+    val done = group.blocks.count { it.toolStatus == com.openminis.app.data.model.ToolBlockStatus.SUCCESS }
+    val failed = group.blocks.count { it.toolStatus == com.openminis.app.data.model.ToolBlockStatus.FAILED || it.toolStatus == com.openminis.app.data.model.ToolBlockStatus.TIMEOUT }
+    val running = group.blocks.any {
+        it.toolStatus == com.openminis.app.data.model.ToolBlockStatus.RUNNING || it.toolStatus == com.openminis.app.data.model.ToolBlockStatus.STREAMING || it.toolStatus == com.openminis.app.data.model.ToolBlockStatus.PENDING
+    }
+    val summary = buildString {
+        append("执行了 ${group.blocks.size} 个操作")
+        if (done > 0) append(" · $done 成功")
+        if (failed > 0) append(" · $failed 失败")
+    }
+    Surface(
+        tonalElevation = 1.dp,
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 3.dp)
+            .clickable { expanded.value = !expanded.value },
+    ) {
+        Column(modifier = Modifier.padding(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Build, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(summary, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                if (running) CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(14.dp))
+                Icon(if (expanded.value) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown, contentDescription = null, modifier = Modifier.size(18.dp))
+            }
+            AnimatedVisibility(expanded.value) {
+                Column {
+                    group.blocks.forEach { b ->
+                        ToolCallPill(
+                            block = b,
+                            allToolBlocks = group.blocks,
+                            onRetry = if (group.isLastCancelled && !isStreaming && !canResume) ({ safeMutate { viewModel.retryLast() } }) else null,
+                            onStop = { viewModel.cancelStream() },
+                            onOpenTerminalWithCommand = onOpenTerminalWithCommand,
+                            onOpenDetail = { viewModel.openToolDetail(it) },
+                            onRerunFromHere = if (!isStreaming) ({
+                                scope.launch { tracedScrollToItem("RERUN-FROM-TOOL", 0, 0) }
+                                safeMutate { viewModel.rerunFromToolBlock(group.messageId, b.id) }
+                            }) else null,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * [v0.24-P0] Standalone card rendering an assistant `<plan>` checklist so the
+ * user can see the agent's agenda at a glance. Completed items show a filled
+ * check; pending items an empty radio.
+ */
+internal fun PlanCard(items: List<FlatChatItem.PlanItem>) {
+    Surface(
+        tonalElevation = 1.dp,
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
+    ) {
+        Column(modifier = Modifier.padding(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Lightbulb, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("计划", style = MaterialTheme.typography.labelMedium)
+            }
+            Spacer(Modifier.height(6.dp))
+            items.forEach { item ->
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 2.dp)) {
+                    Icon(
+                        if (item.checked) Icons.Default.CheckCircle else Icons.Default.RadioButtonUnchecked,
+                        contentDescription = null,
+                        tint = if (item.checked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        item.text,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (item.checked) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
+                    )
+                }
+            }
+        }
+    }
+}
