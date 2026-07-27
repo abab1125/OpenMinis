@@ -53,6 +53,7 @@ import com.openminis.app.sandbox.ExecutionCoordinator
 import com.openminis.app.terminal.MinisOpenUrlBroker
 import com.openminis.app.terminal.MinisUrlMarker
 import com.openminis.app.tools.AgentTools
+import com.openminis.app.tools.ContentSearchTool
 import com.openminis.app.tools.FileEditTool
 import com.openminis.app.tools.FileReadTool
 import com.openminis.app.tools.FileWriteTool
@@ -7671,6 +7672,11 @@ class ChatViewModel(
             // bindMounts map and would surface another session's
             // /var/minis/{workspace,attachments,offloads,browser} files.
             ReadImageTool.NAME -> ReadImageTool.execute(argsJson, activeSessionId, context)
+            // T-content-search: grep-style full-text search; IO-bound, so hop
+            // off the main dispatcher like the other file tools' internals do.
+            ContentSearchTool.NAME -> withContext(Dispatchers.IO) {
+                ContentSearchTool.execute(argsJson, activeSessionId, context)
+            }
             "shell_execute" -> executeShellCommand(argsJson, toolId, toolBlocks, assistantId, currentText)
             "browser_use" -> executeBrowserUseTool(argsJson)
             "memory_write" -> executeMemoryWriteTool(argsJson)

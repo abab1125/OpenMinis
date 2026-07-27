@@ -25,6 +25,10 @@ object AgentTools {
         add(FileReadTool.definition())
         add(FileWriteTool.definition())
         add(FileEditTool.definition())
+        // content_search: grep-style full-text search across skills /
+        // workspace / shared / memory / books — complements @-mention
+        // (name-only matching) so the agent can locate content it can't name.
+        add(ContentSearchTool.definition())
         if (supportsImageInput) {
             add(ReadImageTool.definition())
         }
