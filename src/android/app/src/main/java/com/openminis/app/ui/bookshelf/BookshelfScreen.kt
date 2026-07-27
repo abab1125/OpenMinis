@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.material.icons.outlined.ArrowBack
+import androidx.compose.material.icons.outlined.CloudDownload
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -56,11 +57,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
+import androidx.compose.material3.TextButton
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import com.openminis.app.data.db.BookSourceEntity
 import com.openminis.app.data.repository.BookSourceRepository
 import com.openminis.app.data.repository.RemoteBook
+import com.openminis.app.data.repository.SourceChapter
+import com.openminis.app.sandbox.PRootKernel
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -93,6 +97,9 @@ fun BookshelfScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var books by remember { mutableStateOf(BookRepository.listBooks(context)) }
+    // Source-cached books live in the same /var/minis/books dir but should not
+    // appear in the "我的书" grid (they're reached via the 书源 tab instead).
+    val myBooks = books.filter { it.kind != "source-cache" }
     var showNewBookDialog by remember { mutableStateOf(false) }
     var showDeleteConfirm by remember { mutableStateOf<String?>(null) }
 
@@ -109,6 +116,11 @@ fun BookshelfScreen(
     var sources by remember { mutableStateOf<List<BookSourceEntity>>(emptyList()) }
     var selectedSource by remember { mutableStateOf<BookSourceEntity?>(null) }
     var showImportSourceDialog by remember { mutableStateOf(false) }
+
+    // Cached source-book navigation state. Clicking a book in a source's list
+    // materialises a local cache, then opens its detail screen.
+    var selectedCachedBook by remember { mutableStateOf<String?>(null) }
+    var cachingBook by remember { mutableStateOf(false) }
 
     fun refreshSources() {
         scope.launch {
@@ -178,11 +190,37 @@ fun BookshelfScreen(
         },
     ) { padding ->
         when {
+            cachingBook ->
+                Box(
+                    modifier = Modifier.fillMaxSize().padding(padding),
+                    contentAlignment = Alignment.Center,
+                ) { CircularProgressIndicator() }
+            selectedCachedBook != null ->
+                SourceBookDetailScreen(
+                    modifier = Modifier.fillMaxSize().padding(padding),
+                    bookId = selectedCachedBook!!,
+                    onBack = { selectedCachedBook = null },
+                    context = context,
+                )
             selectedSource != null ->
                 BookSourceBooksContent(
                     modifier = Modifier.fillMaxSize().padding(padding),
                     source = selectedSource!!,
                     onBack = { selectedSource = null },
+                    onBookClick = { bookUrl ->
+                        cachingBook = true
+                        scope.launch {
+                            val id = withContext(Dispatchers.IO) {
+                                BookSourceRepository.cacheBookInfo(selectedSource!!, bookUrl, context)
+                            }
+                            cachingBook = false
+                            if (id != null) {
+                                selectedCachedBook = id
+                            } else {
+                                importError = "缓存失败：无法获取该书详情/目录，请检查书源是否可用。"
+                            }
+                        }
+                    },
                     context = context,
                 )
             tab == 1 ->
@@ -217,7 +255,7 @@ fun BookshelfScreen(
                     }
                 }
             }
-            books.isEmpty() -> {
+            myBooks.isEmpty() -> {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -256,7 +294,7 @@ fun BookshelfScreen(
                         .fillMaxSize()
                         .padding(padding),
                 ) {
-                    items(books, key = { it.id }) { book ->
+                    items(myBooks, key = { it.id }) { book ->
                         BookCard(
                             book = book,
                             onClick = { onBookClick(book.id) },
@@ -358,7 +396,7 @@ fun BookshelfScreen(
 
     // Delete confirmation
     showDeleteConfirm?.let { bookId ->
-        val book = books.find { it.id == bookId }
+        val book = myBooks.find { it.id == bookId }
         MinisAlertDialog(
             onDismissRequest = { showDeleteConfirm = null },
             title = "删除书",
@@ -710,6 +748,7 @@ private fun BookSourceBooksContent(
     modifier: Modifier = Modifier,
     source: BookSourceEntity,
     onBack: () -> Unit,
+    onBookClick: (String) -> Unit,
     context: Context,
 ) {
     val scope = rememberCoroutineScope()
@@ -779,7 +818,7 @@ private fun BookSourceBooksContent(
                 }
             else ->
                 LazyColumn(modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(books, key = { it.bookUrl }) { b -> BookRow(b) }
+                    items(books, key = { it.bookUrl }) { b -> BookRow(b, onClick = { onBookClick(b.bookUrl) }) }
                     if (loading) {
                         item {
                             Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
@@ -800,12 +839,13 @@ private fun BookSourceBooksContent(
 }
 
 @Composable
-private fun BookRow(book: RemoteBook) {
+private fun BookRow(book: RemoteBook, onClick: () -> Unit = {}) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        onClick = onClick,
     ) {
         Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(
@@ -858,11 +898,194 @@ private fun ImportSourceDialog(onDismiss: () -> Unit, onConfirm: (String) -> Uni
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                     com.openminis.app.ui.components.MinisTextButton(onClick = onDismiss) { Text("取消") }
                     Spacer(Modifier.width(8.dp))
-                    com.openminis.app.ui.components.MinisTextButton(onClick = { if (text.isNotBlank()) onConfirm(text) }) {
-                        Text("导入", color = MaterialTheme.colorScheme.primary)
+                com.openminis.app.ui.components.MinisTextButton(onClick = { if (text.isNotBlank()) onConfirm(text) }) {
+                    Text("导入", color = MaterialTheme.colorScheme.primary)
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Detail screen for a cached source book. Mirrors legado's on-demand model:
+ * the book info + TOC are already cached locally (fetched when the book was
+ * clicked in [BookSourceBooksContent]); each chapter body is lazily fetched
+ * the first time it is opened, then persisted under chapters/ and re-read from
+ * disk afterwards. A "导出" action bundles the cached chapters into one .txt.
+ */
+@Composable
+private fun SourceBookDetailScreen(
+    modifier: Modifier = Modifier,
+    bookId: String,
+    onBack: () -> Unit,
+    context: Context,
+) {
+    val scope = rememberCoroutineScope()
+    val book = remember { BookRepository.loadBook(bookId, context) }
+    var chapters by remember { mutableStateOf<List<SourceChapter>>(emptyList()) }
+    var loading by remember { mutableStateOf(true) }
+    var readingNum by remember { mutableStateOf<Int?>(null) }
+    var readingContent by remember { mutableStateOf<String?>(null) }
+    var loadingChapter by remember { mutableStateOf(false) }
+    var exportResult by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(bookId) {
+        loading = true
+        chapters = withContext(Dispatchers.IO) { BookSourceRepository.listSourceChapters(bookId, context) }
+        loading = false
+    }
+
+    fun openChapter(num: Int) {
+        loadingChapter = true
+        readingNum = num
+        scope.launch {
+            val text = withContext(Dispatchers.IO) { BookSourceRepository.readSourceChapter(bookId, num, context) }
+            loadingChapter = false
+            readingContent = text
+        }
+    }
+
+    fun doExport() {
+        scope.launch {
+            val chs = withContext(Dispatchers.IO) { BookSourceRepository.listSourceChapters(bookId, context) }
+            val sb = StringBuilder()
+            sb.appendLine("# ${book?.title ?: "book"}")
+            sb.appendLine()
+            var exported = 0
+            var skipped = 0
+            for (c in chs) {
+                if (!c.cached) { skipped++; continue }
+                val text = withContext(Dispatchers.IO) { BookRepository.readChapter(bookId, c.num, context) } ?: continue
+                val body = text.lines().dropWhile { it.startsWith("# ") }.drop(1).joinToString("\n").trimStart('\n')
+                sb.appendLine("## 第${c.num}章")
+                sb.appendLine(body)
+                sb.appendLine()
+                exported++
+            }
+            val hostDir = PRootKernel.resolveSessionHostPath("", BookRepository.booksBasePath(), context)
+                ?.let { java.io.File(it, bookId) }
+            val safe = (book?.title ?: "book").filter { it.isLetterOrDigit() || it in "_-" }.ifBlank { "book" }
+            val outFile = hostDir?.let {
+                java.io.File(java.io.File(it, "export").also { d -> d.mkdirs() }, "$safe.txt")
+            }
+            outFile?.writeText(sb.toString())
+            exportResult = if (outFile != null) {
+                "已导出 $exported 章到：\n${outFile.absolutePath}" +
+                    if (skipped > 0) "\n($skipped 章尚未缓存，已跳过——先点开这些章再导出)" else ""
+            } else {
+                "导出失败：无法解析书籍目录"
+            }
+        }
+    }
+
+    Column(modifier) {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(12.dp)) {
+            IconButton(onClick = onBack) { Icon(Icons.Outlined.ArrowBack, contentDescription = "返回") }
+            Text(
+                book?.title ?: bookId,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            TextButton(onClick = { doExport() }) {
+                Text("导出", color = MaterialTheme.colorScheme.primary)
+            }
+        }
+        Column(modifier = Modifier.padding(horizontal = 16.dp)) {
+            val sub = listOfNotNull(
+                book?.author?.takeIf { it.isNotBlank() },
+                "共 ${chapters.size} 章 · 已缓存 ${chapters.count { it.cached }}",
+            ).joinToString(" · ")
+            Text(sub, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (!book?.synopsis.isNullOrBlank()) {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    book?.synopsis ?: "",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 4,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        when {
+            loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+            chapters.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text("无章节", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            else -> LazyColumn(
+                modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                items(chapters, key = { it.num }) { ch ->
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+                        onClick = { openChapter(ch.num) },
+                    ) {
+                        Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                            if (ch.cached) {
+                                Icon(Icons.Outlined.Book, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+                            } else {
+                                Icon(Icons.Outlined.CloudDownload, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
+                            }
+                            Spacer(Modifier.width(10.dp))
+                            Text(ch.title, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
                     }
                 }
             }
         }
     }
+
+    // Reader dialog (full-screen-ish).
+    if (readingNum != null) {
+        androidx.compose.ui.window.Dialog(
+            onDismissRequest = { readingNum = null; readingContent = null },
+            properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false),
+        ) {
+            androidx.compose.material3.Surface(
+                modifier = Modifier.fillMaxSize().padding(16.dp),
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.surface,
+            ) {
+                Column {
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(12.dp)) {
+                        IconButton(onClick = { readingNum = null; readingContent = null }) {
+                            Icon(Icons.Outlined.ArrowBack, contentDescription = "关闭")
+                        }
+                        Text(
+                            "第${readingNum}章",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                    if (loadingChapter) {
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+                    } else {
+                        LazyColumn(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+                            item { Text(readingContent ?: "（空）", style = MaterialTheme.typography.bodyMedium) }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    exportResult?.let { msg ->
+        MinisAlertDialog(
+            onDismissRequest = { exportResult = null },
+            title = "导出完成",
+            text = msg,
+            confirmText = "知道了",
+            onConfirm = { exportResult = null },
+        )
+    }
+}
 }
