@@ -161,6 +161,39 @@ object BookRepository {
         return existed
     }
 
+    /** Read up to [max] bytes from [input] for charset / rule sniffing. */
+    private fun readSample(input: java.io.InputStream, max: Int = 512_000): ByteArray {
+        val buf = ByteArray(max)
+        var off = 0
+        while (off < max) {
+            val n = input.read(buf, off, max - off)
+            if (n <= 0) break
+            off += n
+        }
+        return buf.copyOf(off)
+    }
+
+    /**
+     * Fill in null import params: null [charset] → [EncodingDetector] sniff;
+     * null [regex] → [TxtTocRules.autoDetect] over the decoded sample (falls
+     * back to "" = size-based splitting when no rule scores enough matches).
+     * [sampleProvider] is only invoked when something is actually null.
+     */
+    private fun resolveImportParams(
+        regex: String?,
+        charset: java.nio.charset.Charset?,
+        sampleProvider: () -> ByteArray,
+    ): Pair<String, java.nio.charset.Charset> {
+        if (regex != null && charset != null) return regex to charset
+        val sample = sampleProvider()
+        val cs = charset ?: com.openminis.app.data.imports.EncodingDetector.detect(sample)
+        val rx = regex ?: run {
+            val text = String(sample, cs)
+            com.openminis.app.data.imports.TxtTocRules.autoDetect(text)?.regex ?: ""
+        }
+        return rx to cs
+    }
+
     /**
      * Agent-friendly import: split a TXT file already on the host filesystem
      * (resolved via the book-id host dir, so a path under /var/minis/... works)
@@ -174,8 +207,8 @@ object BookRepository {
     fun importBookFromPath(
         title: String,
         sourcePath: String,
-        regex: String,
-        charset: java.nio.charset.Charset,
+        regex: String?,
+        charset: java.nio.charset.Charset?,
         context: Context,
         progress: ((written: Int, total: Int) -> Unit)? = null,
     ): String? {
@@ -187,9 +220,18 @@ object BookRepository {
             ?.takeIf { it.isFile }
             ?: File(sourcePath).takeIf { it.isFile }
             ?: return null
+        // Auto-detect charset and/or split rule from a leading sample when
+        // the caller leaves them null ("智能识别" / agent default).
+        val (rx, cs) = try {
+            resolveImportParams(regex, charset) {
+                src.inputStream().use { readSample(it) }
+            }
+        } catch (_: Exception) {
+            return null
+        }
         val chapters = try {
             src.inputStream().use { input ->
-                com.openminis.app.data.imports.TxtChapterSplitter.split(input, regex, charset)
+                com.openminis.app.data.imports.TxtChapterSplitter.split(input, rx, cs)
             }
         } catch (_: Exception) {
             return null
@@ -221,17 +263,27 @@ object BookRepository {
     fun importBook(
         title: String,
         sourceUri: android.net.Uri,
-        regex: String,
-        charset: java.nio.charset.Charset,
+        regex: String?,
+        charset: java.nio.charset.Charset?,
         context: Context,
         progress: ((written: Int, total: Int) -> Unit)? = null,
     ): String? {
         val bookId = "import_${System.currentTimeMillis()}"
+        // Auto-detect charset and/or split rule from a leading sample when
+        // the caller leaves them null ("智能识别" / "自动检测").
+        val (rx, cs) = try {
+            resolveImportParams(regex, charset) {
+                context.contentResolver.openInputStream(sourceUri)?.use { readSample(it) }
+                    ?: ByteArray(0)
+            }
+        } catch (_: Exception) {
+            return null
+        }
         // Read & split the source first - if this fails we don't leave a
         // half-created book directory behind.
         val chapters = try {
             context.contentResolver.openInputStream(sourceUri)?.use { input ->
-                com.openminis.app.data.imports.TxtChapterSplitter.split(input, regex, charset)
+                com.openminis.app.data.imports.TxtChapterSplitter.split(input, rx, cs)
             } ?: return null
         } catch (_: Exception) {
             return null

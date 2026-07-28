@@ -6083,6 +6083,7 @@ private fun ThinkingLevelSheet(
  * line summary ("执行了 N 个操作 · X 成功 · Y 失败") that expands into the
  * individual [ToolCallPill]s when tapped.
  */
+@Composable
 internal fun ToolCallGroupCard(
     group: FlatChatItem.AssistantToolGroup,
     isStreaming: Boolean,
@@ -6090,15 +6091,15 @@ internal fun ToolCallGroupCard(
     viewModel: ChatViewModel,
     onOpenTerminalWithCommand: (String) -> Unit,
     safeMutate: (() -> Unit) -> Unit,
-    tracedScrollToItem: (String, Int, Int) -> Unit,
+    tracedScrollToItem: suspend (String, Int, Int) -> Unit,
     context: android.content.Context,
 ) {
     val scope = rememberCoroutineScope()
     val expanded = remember { mutableStateOf(false) }
-    val done = group.blocks.count { it.toolStatus == com.openminis.app.data.model.ToolBlockStatus.SUCCESS }
-    val failed = group.blocks.count { it.toolStatus == com.openminis.app.data.model.ToolBlockStatus.FAILED || it.toolStatus == com.openminis.app.data.model.ToolBlockStatus.TIMEOUT }
+    val done = group.blocks.count { it.toolStatus == ToolBlockStatus.SUCCESS }
+    val failed = group.blocks.count { it.toolStatus == ToolBlockStatus.FAILED || it.toolStatus == ToolBlockStatus.TIMEOUT }
     val running = group.blocks.any {
-        it.toolStatus == com.openminis.app.data.model.ToolBlockStatus.RUNNING || it.toolStatus == com.openminis.app.data.model.ToolBlockStatus.STREAMING || it.toolStatus == com.openminis.app.data.model.ToolBlockStatus.PENDING
+        it.toolStatus == ToolBlockStatus.RUNNING || it.toolStatus == ToolBlockStatus.STREAMING || it.toolStatus == ToolBlockStatus.PENDING
     }
     val summary = buildString {
         append("执行了 ${group.blocks.size} 个操作")
@@ -6148,6 +6149,7 @@ internal fun ToolCallGroupCard(
  * user can see the agent's agenda at a glance. Completed items show a filled
  * check; pending items an empty radio.
  */
+@Composable
 internal fun PlanCard(items: List<FlatChatItem.PlanItem>) {
     Surface(
         tonalElevation = 1.dp,

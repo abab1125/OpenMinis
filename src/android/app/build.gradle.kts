@@ -188,6 +188,11 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.squareup.okhttp3:okhttp-sse:4.12.0")
 
+    // Jsoup — HTML book-source rule evaluation (@css selectors / @attr /
+    // ##-cleaning / :regex), mirroring legado's HTML-source parsing. JSON-API
+    // sources keep using JsonPathEvaluator; HTML sources route through this.
+    implementation("org.jsoup:jsoup:1.18.1")
+
     // Kotlinx Serialization
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
 

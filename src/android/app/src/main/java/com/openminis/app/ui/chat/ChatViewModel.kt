@@ -444,13 +444,13 @@ class ChatViewModel(
         val sourcePath = args.optString("source_path", "").trim()
         if (title.isBlank()) return ToolExecutionResult("Error: 'title' is required", false)
         if (sourcePath.isBlank()) return ToolExecutionResult("Error: 'source_path' is required", false)
-        val regex = args.optString("regex", "").trim().ifBlank {
-            com.openminis.app.data.imports.TxtTocRules.presets[com.openminis.app.data.imports.TxtTocRules.DEFAULT_INDEX].regex
-        }
+        // Blank regex => smart auto-detect (best-matching preset rule) with
+        // automatic charset sniffing (UTF-8/GBK) — mirrors the UI default.
+        val regex: String? = args.optString("regex", "").trim().ifBlank { null }
         val bookId = withContext(kotlinx.coroutines.Dispatchers.IO) {
             runCatching {
                 com.openminis.app.data.repository.BookRepository.importBookFromPath(
-                    title, sourcePath, regex, Charsets.UTF_8, context,
+                    title, sourcePath, regex, null, context,
                 )
             }.getOrNull()
         } ?: return ToolExecutionResult(

@@ -3,6 +3,7 @@ package com.openminis.app.data.repository
 import android.content.Context
 import com.openminis.app.data.db.AppDatabase
 import com.openminis.app.data.db.BookSourceEntity
+import com.openminis.app.data.source.HtmlRuleEvaluator
 import com.openminis.app.data.source.JsonPathEvaluator
 import com.openminis.app.sandbox.PRootKernel
 import kotlinx.coroutines.Dispatchers
@@ -11,6 +12,8 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONArray
 import org.json.JSONObject
+import org.jsoup.Jsoup
+import org.jsoup.nodes.Element
 import java.io.File
 
 /**
@@ -129,23 +132,31 @@ object BookSourceRepository {
         } catch (_: Exception) {
             null
         } ?: return@withContext emptyList()
-        val root = runCatching { JSONObject(body) }.getOrNull() ?: return@withContext emptyList()
 
         val rule = runCatching { JSONObject(source.ruleExploreJson) }.getOrNull() ?: JSONObject()
-        val bookListPath = rule.optString("bookList", "$.data")
-        val items = JsonPathEvaluator.evalList(root, bookListPath)
-            .mapNotNull { it as? JSONArray }
-            .flatMap { arr -> (0 until arr.length()).map { arr.get(it) } }
+        val bookListRule = rule.optString("bookList", "$.data")
+        val html = sourceIsHtml(source)
 
-        items.mapNotNull { it as? JSONObject }.map { obj ->
+        val nodes: List<Any> = if (html) {
+            val doc = runCatching { Jsoup.parse(body) }.getOrNull() ?: return@withContext emptyList()
+            HtmlRuleEvaluator.selectElements(doc, bookListRule)
+        } else {
+            val root = runCatching { JSONObject(body) }.getOrNull() ?: return@withContext emptyList()
+            JsonPathEvaluator.evalList(root, bookListRule)
+                .mapNotNull { it as? JSONArray }
+                .flatMap { arr -> (0 until arr.length()).map { arr.get(it) } }
+                .mapNotNull { it as? JSONObject }
+        }
+
+        nodes.map { node ->
             RemoteBook(
-                name = JsonPathEvaluator.evalString(obj, rule.optString("name", "$.name")) ?: "",
-                author = JsonPathEvaluator.evalString(obj, rule.optString("author", "$.author")) ?: "",
-                coverUrl = JsonPathEvaluator.evalString(obj, rule.optString("coverUrl", "$.coverUrl")) ?: "",
-                bookUrl = JsonPathEvaluator.evalString(obj, rule.optString("bookUrl", "$.bookUrl")) ?: "",
-                kind = JsonPathEvaluator.evalString(obj, rule.optString("kind", "$.kind")) ?: "",
-                lastChapter = JsonPathEvaluator.evalString(obj, rule.optString("lastChapter", "$.lastChapter")) ?: "",
-                intro = JsonPathEvaluator.evalString(obj, rule.optString("intro", "$.intro")) ?: "",
+                name = nodeText(node, rule.optString("name", if (html) "" else "$.name")),
+                author = nodeText(node, rule.optString("author", "")),
+                coverUrl = nodeText(node, rule.optString("coverUrl", "")),
+                bookUrl = nodeText(node, rule.optString("bookUrl", "")),
+                kind = nodeText(node, rule.optString("kind", "")),
+                lastChapter = nodeText(node, rule.optString("lastChapter", "")),
+                intro = nodeText(node, rule.optString("intro", "")),
             )
         }
     }
@@ -169,7 +180,11 @@ object BookSourceRepository {
             val reqBuilder = Request.Builder().url(tocUrl)
             parseHeader(source.header)?.forEach { (k, v) -> reqBuilder.addHeader(k, v) }
             val body = client.newCall(reqBuilder.build()).execute().use { it.body?.string() }
-            val root = runCatching { JSONObject(body ?: "") }.getOrNull() ?: return@withContext null
+            val root: Any = if (sourceIsHtml(source)) {
+                runCatching { Jsoup.parse(body ?: "") }.getOrNull() ?: return@withContext null
+            } else {
+                runCatching { JSONObject(body ?: "") }.getOrNull() ?: return@withContext null
+            }
             parseBookInfoAndToc(root, source)
         } catch (_: Exception) {
             null
@@ -277,6 +292,36 @@ object BookSourceRepository {
 
     // ── Helpers ──────────────────────────────────────────────────────────
 
+    /**
+     * Evaluate a single field rule against one node (a [JSONObject] for JSON
+     * sources or an [Element] for HTML sources). Dispatches on the rule prefix
+     * (`$.` → JSONPath, anything else → HTML/CSS) so a source is parsed with
+     * the engine its rules describe.
+     */
+    private fun nodeText(node: Any, fieldRule: String): String {
+        val r = fieldRule.trim()
+        if (r.isEmpty()) return ""
+        return if (r.startsWith("$")) {
+            JsonPathEvaluator.evalString(node as? JSONObject, r) ?: ""
+        } else {
+            val el = node as? Element ?: return ""
+            HtmlRuleEvaluator.evalText(el, r) ?: ""
+        }
+    }
+
+    /**
+     * True when a source's rules describe an HTML book (legado `@css`/XPath)
+     * rather than a JSON API (`$.field`). Inspected from whichever rule object
+     * is present; a single non-`$` list/field rule is enough to flag the
+     * source as HTML.
+     */
+    private fun sourceIsHtml(source: BookSourceEntity): Boolean {
+        val probe = source.ruleTocJson ?: source.ruleBookInfoJson ?: source.ruleExploreJson
+        val r = runCatching { JSONObject(probe ?: "{}") }.getOrNull() ?: return false
+        return listOf("chapterList", "bookList", "name", "content")
+            .any { key -> r.optString(key, "").let { it.isNotBlank() && !it.trim().startsWith("$") } }
+    }
+
     private fun sourceBookId(sourceUrl: String, bookUrl: String): String {
         val a = kotlin.math.abs(sourceUrl.hashCode()).toString(36)
         val b = kotlin.math.abs(bookUrl.hashCode()).toString(36)
@@ -292,27 +337,34 @@ object BookSourceRepository {
 
     private data class ChapterRef(val title: String, val url: String)
 
-    private fun parseBookInfoAndToc(root: JSONObject, source: BookSourceEntity): Pair<BookInfo, List<ChapterRef>>? {
+    private fun parseBookInfoAndToc(root: Any, source: BookSourceEntity): Pair<BookInfo, List<ChapterRef>>? {
         val infoRule = runCatching { JSONObject(source.ruleBookInfoJson ?: "{}") }.getOrNull() ?: JSONObject()
         val tocRule = runCatching { JSONObject(source.ruleTocJson ?: "{}") }.getOrNull() ?: JSONObject()
+        val html = sourceIsHtml(source)
 
-        val name = JsonPathEvaluator.evalString(root, infoRule.optString("name", "$.data.name")) ?: return null
-        val author = JsonPathEvaluator.evalString(root, infoRule.optString("author", "$.data.author")) ?: ""
-        val intro = JsonPathEvaluator.evalString(root, infoRule.optString("intro", "$.data.intro")) ?: ""
-        val coverUrl = JsonPathEvaluator.evalString(root, infoRule.optString("coverUrl", "$.data.coverUrl")) ?: ""
+        val name = nodeText(root, infoRule.optString("name", if (html) "" else "$.data.name"))
+        if (name.isEmpty()) return null
+        val author = nodeText(root, infoRule.optString("author", if (html) "" else "$.data.author"))
+        val intro = nodeText(root, infoRule.optString("intro", if (html) "" else "$.data.intro"))
+        val coverUrl = nodeText(root, infoRule.optString("coverUrl", if (html) "" else "$.data.coverUrl"))
 
-        val listPath = tocRule.optString("chapterList", "$.data.chapters")
-        val arr = JsonPathEvaluator.evalList(root, listPath)
-            .mapNotNull { it as? JSONArray }.firstOrNull()
-        val chapters = if (arr == null) {
-            emptyList()
+        val listRule = tocRule.optString("chapterList", if (html) "" else "$.data.chapters")
+        val nodes: List<Any> = if (html) {
+            val el = root as? Element ?: return null
+            HtmlRuleEvaluator.selectElements(el, listRule)
         } else {
-            (0 until arr.length()).mapNotNull { i ->
-                val obj = arr.optJSONObject(i) ?: return@mapNotNull null
-                val title = JsonPathEvaluator.evalString(obj, tocRule.optString("chapterName", "$.title")) ?: "第${i + 1}章"
-                val url = JsonPathEvaluator.evalString(obj, tocRule.optString("chapterUrl", "$.chapterUrl")) ?: return@mapNotNull null
-                ChapterRef(title, url)
-            }
+            val jo = root as? JSONObject ?: return null
+            JsonPathEvaluator.evalList(jo, listRule)
+                .mapNotNull { it as? JSONArray }
+                .firstOrNull()
+                ?.let { arr -> (0 until arr.length()).mapNotNull { arr.optJSONObject(it) } }
+                ?: emptyList()
+        }
+        val chapters = nodes.mapIndexedNotNull { i, node ->
+            val title = nodeText(node, tocRule.optString("chapterName", if (html) "" else "$.title"))
+                .ifBlank { "第${i + 1}章" }
+            val url = nodeText(node, tocRule.optString("chapterUrl", if (html) "" else "$.chapterUrl"))
+            if (url.isEmpty()) null else ChapterRef(title, url)
         }
         return Pair(BookInfo(name, author, intro, coverUrl), chapters)
     }
@@ -324,13 +376,26 @@ object BookSourceRepository {
         } catch (_: Exception) {
             null
         } ?: return null
-        val root = runCatching { JSONObject(body) }.getOrNull() ?: return null
         val rule = runCatching { JSONObject(ruleContentJson) }.getOrNull() ?: JSONObject()
-        val content = JsonPathEvaluator.evalString(root, rule.optString("content", "$.data.content")) ?: return null
+        val contentRule = rule.optString("content", "$.data.content")
+        val html = !contentRule.trim().startsWith("$")
+        val root: Any = if (html) {
+            runCatching { Jsoup.parse(body) }.getOrNull() ?: return null
+        } else {
+            runCatching { JSONObject(body) }.getOrNull() ?: return null
+        }
+        val content: String? = if (html) {
+            val doc = root as Element
+            HtmlRuleEvaluator.evalHtml(doc, contentRule)?.let { htmlToText(it) }
+        } else {
+            JsonPathEvaluator.evalString(root as JSONObject, contentRule)
+        }
+        if (content.isNullOrBlank()) return null
         // legado ruleContent can declare nextContentUrl for paginated chapters.
         val nextPath = rule.optString("nextContentUrl", "")
         val next = if (nextPath.isNotBlank()) {
-            JsonPathEvaluator.evalString(root, nextPath)
+            if (html) HtmlRuleEvaluator.evalText(root as Element, nextPath)
+            else JsonPathEvaluator.evalString(root as JSONObject, nextPath)
         } else {
             null
         }

@@ -20,7 +20,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.material.icons.outlined.ArrowBack
@@ -330,7 +329,8 @@ fun BookshelfScreen(
                 importError = null
             },
             onConfirm = { title, ruleIndex, charset ->
-                val regex = TxtTocRules.presets[ruleIndex].regex
+                // ruleIndex -1 / charset null => auto-detect inside importBook.
+                val regex: String? = if (ruleIndex < 0) null else TxtTocRules.presets[ruleIndex].regex
                 importing = true
                 importProgress = 0 to 0
                 pickedUri = null
@@ -534,21 +534,25 @@ private fun NewBookDialog(
 private fun ImportBookDialog(
     uri: Uri,
     onDismiss: () -> Unit,
-    onConfirm: (title: String, ruleIndex: Int, charset: Charset) -> Unit,
+    onConfirm: (title: String, ruleIndex: Int, charset: Charset?) -> Unit,
 ) {
     var title by remember { mutableStateOf("") }
-    var ruleIndex by remember { mutableStateOf(TxtTocRules.DEFAULT_INDEX) }
-    var charsetIndex by remember { mutableStateOf(0) }
+    // -1 = 智能识别（自动挑选最匹配的分章规则）— the recommended default.
+    var ruleIndex by remember { mutableStateOf(-1) }
+    // -1 = 自动检测编码（UTF-8/GBK 嗅探）— the recommended default.
+    var charsetIndex by remember { mutableStateOf(-1) }
     var rulesExpanded by remember { mutableStateOf(false) }
     var charsetExpanded by remember { mutableStateOf(false) }
 
     val charsets: List<Pair<java.nio.charset.Charset, String>> = listOf(
         Charsets.UTF_8 to "UTF-8",
         java.nio.charset.Charset.forName("GBK") to "GBK",
+        java.nio.charset.Charset.forName("GB18030") to "GB18030",
         Charsets.ISO_8859_1 to "ISO-8859-1",
     )
-    val currentRule = TxtTocRules.presets[ruleIndex]
-    val currentCharset = charsets[charsetIndex].first
+    val currentRuleName = if (ruleIndex < 0) "智能识别（推荐）" else TxtTocRules.presets[ruleIndex].name
+    val currentCharset: Charset? = if (charsetIndex < 0) null else charsets[charsetIndex].first
+    val currentCharsetName = if (charsetIndex < 0) "自动检测（推荐）" else charsets[charsetIndex].second
 
     androidx.compose.ui.window.Dialog(
         onDismissRequest = onDismiss,
@@ -578,12 +582,28 @@ private fun ImportBookDialog(
                     com.openminis.app.ui.components.MinisTextButton(
                         onClick = { rulesExpanded = true },
                     ) {
-                        Text(currentRule.name)
+                        Text(currentRuleName)
                     }
                     DropdownMenu(
                         expanded = rulesExpanded,
                         onDismissRequest = { rulesExpanded = false },
                     ) {
+                        DropdownMenuItem(
+                            text = {
+                                Column {
+                                    Text("智能识别（推荐）")
+                                    Text(
+                                        "自动试跑全部规则，选命中最多的一条",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            },
+                            onClick = {
+                                ruleIndex = -1
+                                rulesExpanded = false
+                            },
+                        )
                         TxtTocRules.presets.forEachIndexed { i, rule ->
                             DropdownMenuItem(
                                 text = {
@@ -612,13 +632,20 @@ private fun ImportBookDialog(
                     com.openminis.app.ui.components.MinisTextButton(
                         onClick = { charsetExpanded = true },
                     ) {
-                        Text(currentCharset.name())
+                        Text(currentCharsetName)
                     }
                     DropdownMenu(
                         expanded = charsetExpanded,
                         onDismissRequest = { charsetExpanded = false },
                     ) {
-                        charsets.forEachIndexed { i, (cs, label) ->
+                        DropdownMenuItem(
+                            text = { Text("自动检测（推荐）") },
+                            onClick = {
+                                charsetIndex = -1
+                                charsetExpanded = false
+                            },
+                        )
+                        charsets.forEachIndexed { i, (_, label) ->
                             DropdownMenuItem(
                                 text = { Text(label) },
                                 onClick = {
@@ -898,8 +925,9 @@ private fun ImportSourceDialog(onDismiss: () -> Unit, onConfirm: (String) -> Uni
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                     com.openminis.app.ui.components.MinisTextButton(onClick = onDismiss) { Text("取消") }
                     Spacer(Modifier.width(8.dp))
-                com.openminis.app.ui.components.MinisTextButton(onClick = { if (text.isNotBlank()) onConfirm(text) }) {
-                    Text("导入", color = MaterialTheme.colorScheme.primary)
+                    com.openminis.app.ui.components.MinisTextButton(onClick = { if (text.isNotBlank()) onConfirm(text) }) {
+                        Text("导入", color = MaterialTheme.colorScheme.primary)
+                    }
                 }
             }
         }
@@ -994,10 +1022,7 @@ private fun SourceBookDetailScreen(
             }
         }
         Column(modifier = Modifier.padding(horizontal = 16.dp)) {
-            val sub = listOfNotNull(
-                book?.author?.takeIf { it.isNotBlank() },
-                "共 ${chapters.size} 章 · 已缓存 ${chapters.count { it.cached }}",
-            ).joinToString(" · ")
+            val sub = "共 ${chapters.size} 章 · 已缓存 ${chapters.count { it.cached }}"
             Text(sub, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             if (!book?.synopsis.isNullOrBlank()) {
                 Spacer(Modifier.height(6.dp))
@@ -1087,5 +1112,4 @@ private fun SourceBookDetailScreen(
             onConfirm = { exportResult = null },
         )
     }
-}
 }
