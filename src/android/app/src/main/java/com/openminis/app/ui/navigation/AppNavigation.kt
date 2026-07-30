@@ -557,6 +557,17 @@ fun AppNavigation(
                         launchSingleTop = true
                     }
                 },
+                // B-hermes: chat-menu "New Hermes" routes to a draft session
+                // whose ID carries the __hermes__ suffix; ChatViewModel picks it
+                // up and routes all messages through the Hermes gateway.
+                onNewHermesSession = {
+                    navController.safeNavigate(
+                        Routes.chat("__new__${java.util.UUID.randomUUID()}__hermes__"),
+                    ) {
+                        popUpTo(Routes.SESSION_LIST) { inclusive = false }
+                        launchSingleTop = true
+                    }
+                },
                 onOpenTerminal = {
                     navController.safeNavigate(Routes.terminal(sessionId = sessionId))
                 },
@@ -649,6 +660,17 @@ fun AppNavigation(
                         launchSingleTop = true
                     }
                 },
+                // B-hermes: chat-menu "New Hermes" routes to a draft session
+                // whose ID carries the __hermes__ suffix; ChatViewModel picks it
+                // up and routes all messages through the Hermes gateway.
+                onNewHermesSession = {
+                    navController.safeNavigate(
+                        Routes.chat("__new__${java.util.UUID.randomUUID()}__hermes__"),
+                    ) {
+                        popUpTo(Routes.SESSION_LIST) { inclusive = false }
+                        launchSingleTop = true
+                    }
+                },
                 onOpenTerminal = {
                     navController.safeNavigate(Routes.terminal())
                 },
@@ -696,6 +718,11 @@ fun AppNavigation(
         composable(Routes.HERMES_GATEWAY) {
             HermesGatewaySettingsScreen(
                 onBack = { navController.safePopBackStack() },
+                onNewHermesSession = { sessionId ->
+                    navController.safeNavigate(Routes.chat(sessionId)) {
+                        popUpTo(Routes.HERMES_GATEWAY) { inclusive = true }
+                    }
+                },
             )
         }
 

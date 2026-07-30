@@ -859,19 +859,6 @@ private fun DualFabRow(
                 expanded = showGroupMenu,
                 onDismissRequest = { showGroupMenu = false },
             ) {
-                // B-hermes: top entry creates a Hermes-backend session (messages
-                // transparently passthrough to the local gateway). Separated
-                // from the per-group entries by a divider so it reads as a mode
-                // switch, not another group.
-                DropdownMenuItem(
-                    text = { Text("New Hermes session") },
-                    leadingIcon = { Icon(Icons.Outlined.Public, contentDescription = null) },
-                    onClick = {
-                        showGroupMenu = false
-                        onNewHermesSession()
-                    },
-                )
-                if (topGroups.isNotEmpty()) MinisMenuDivider()
                 topGroups.forEach { group ->
                     DropdownMenuItem(
                         text = { Text(group.name) },
@@ -921,6 +908,20 @@ private fun DualFabRow(
                     Icon(Icons.Outlined.Search, contentDescription = stringResource(R.string.sessionlist_search_action), tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(24.dp))
                 }
             }
+        }
+    }
+
+    val hermesFab: @Composable () -> Unit = {
+        FloatingActionButton(
+            onClick = onNewHermesSession,
+            shape = CircleShape,
+            containerColor = minisFabColor(),
+            modifier = Modifier
+                .size(56.dp)
+                .shadow(8.dp, CircleShape, ambientColor = Color.Black.copy(alpha = 0.2f)),
+            elevation = FloatingActionButtonDefaults.elevation(defaultElevation = 6.dp),
+        ) {
+            Icon(Icons.Outlined.Public, contentDescription = "New Hermes session", tint = Color.White, modifier = Modifier.size(24.dp))
         }
     }
 
@@ -999,6 +1000,10 @@ private fun DualFabRow(
                     .heightIn(min = 48.dp)
                     .focusRequester(searchFocusRequester),
             )
+        }
+
+        if (!isSearchActive) {
+            hermesFab()
         }
 
         if (isSwapped) { chatFab() } else { searchFab() }

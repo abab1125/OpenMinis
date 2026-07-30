@@ -507,7 +507,9 @@ class SessionListViewModel(
      * through the Hermes gateway passthrough. null (default) = local loop.
      */
     fun createNewSession(groupId: String? = null, backend: String? = null): String? {
-        if (providerRepository.allVisibleEntries().isEmpty()) return null
+        // Hermes-backend sessions bypass the local agent loop, so they don't
+        // require any configured provider — only local sessions do.
+        if (backend != "hermes" && providerRepository.allVisibleEntries().isEmpty()) return null
         val base = "__new__${java.util.UUID.randomUUID()}"
         val withGroup = if (groupId != null) "${base}__grp__${groupId}" else base
         return if (backend == "hermes") "${withGroup}__hermes__" else withGroup

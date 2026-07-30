@@ -392,6 +392,10 @@ fun ChatScreen(
      *  navigates to a fresh draft chat (same funnel as the session list's
      *  new-chat button), replacing this chat on the back stack. */
     onNewChat: () -> Unit = {},
+    /** B-hermes: "New Hermes" from the chat "..." menu — caller creates a
+     *  Hermes-backend draft session and navigates to it, same funnel as the
+     *  session list's New Hermes button. */
+    onNewHermesSession: () -> Unit = {},
     onOpenTerminal: () -> Unit = {},
     /** Open the in-app terminal with [command] pre-filled at the prompt
      *  (no trailing newline — the user reviews and presses Enter manually).
@@ -2182,6 +2186,23 @@ fun ChatScreen(
                                     }
                                 }
                             }
+
+                            // B-hermes: a small line at the very top distinguishing the
+                            // two backends, so the user always knows whether messages run
+                            // locally or passthrough to the remote Hermes gateway.
+                            val backendLabel = if (viewModel.isHermesBackend) "远程 Hermes 网关" else "本地 Agent"
+                            Text(
+                                text = backendLabel,
+                                fontSize = 10.sp,
+                                lineHeight = 12.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = if (viewModel.isHermesBackend)
+                                    MaterialTheme.colorScheme.primary
+                                else ChatColors.tertiaryText,
+                                maxLines = 1,
+                                style = noFontPad,
+                                modifier = Modifier.padding(top = 2.dp),
+                            )
                         }
                     }
                 },
@@ -2299,6 +2320,18 @@ fun ChatScreen(
                                 },
                                 leadingIcon = {
                                     Icon(Icons.Outlined.Forum, contentDescription = null)
+                                },
+                            )
+                            // B-hermes: quick entry to create a Hermes-backend session
+                            // without returning to the session list.
+                            DropdownMenuItem(
+                                text = { Text("新建 Hermes") },
+                                onClick = {
+                                    showChatMenu = false
+                                    onNewHermesSession()
+                                },
+                                leadingIcon = {
+                                    Icon(Icons.Outlined.Public, contentDescription = null)
                                 },
                             )
                             MinisMenuDivider()

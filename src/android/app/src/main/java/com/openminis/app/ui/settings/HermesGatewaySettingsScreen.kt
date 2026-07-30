@@ -52,7 +52,10 @@ import kotlinx.coroutines.withContext
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun HermesGatewaySettingsScreen(onBack: () -> Unit) {
+fun HermesGatewaySettingsScreen(
+    onBack: () -> Unit,
+    onNewHermesSession: (String) -> Unit,
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
@@ -152,14 +155,32 @@ fun HermesGatewaySettingsScreen(onBack: () -> Unit) {
 
             Spacer(Modifier.height(4.dp))
 
-            Button(
-                onClick = {
-                    HermesClientHolder.saveConfig(baseUrl, token)
-                    onBack()
-                },
-                enabled = baseUrl.isNotBlank(),
+            Row(
                 modifier = Modifier.fillMaxWidth(),
-            ) { Text("Save") }
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Button(
+                    onClick = {
+                        HermesClientHolder.saveConfig(baseUrl, token)
+                        onBack()
+                    },
+                    enabled = baseUrl.isNotBlank(),
+                    modifier = Modifier.weight(1f),
+                ) { Text("Save") }
+
+                OutlinedButton(
+                    onClick = {
+                        HermesClientHolder.saveConfig(baseUrl, token)
+                        // Mirror SessionListViewModel.createNewSession(backend="hermes"):
+                        // the __hermes__ suffix on the draft id routes the new
+                        // session through the Hermes gateway in ChatViewModel.
+                        val draftId = "__new__${java.util.UUID.randomUUID()}__hermes__"
+                        onNewHermesSession(draftId)
+                    },
+                    enabled = baseUrl.isNotBlank(),
+                    modifier = Modifier.weight(1f),
+                ) { Text("New Hermes session") }
+            }
         }
     }
 }
