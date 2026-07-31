@@ -155,6 +155,7 @@ object Routes {
     const val BOOK_CHAT = "book/{bookId}/chat"
     fun bookDetail(bookId: String) = "book/$bookId"
     fun chapterReader(bookId: String, chapterNum: Int) = "book/$bookId/chapter/$chapterNum"
+    fun chapterEdit(bookId: String, chapterNum: Int) = "book/$bookId/chapter/$chapterNum/edit"
     fun bookChat(bookId: String) = "book/$bookId/chat"
     /** [T-soul-md] SOUL.md editor. */
     const val SOUL = "soul"
