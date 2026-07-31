@@ -151,6 +151,7 @@ object Routes {
     const val BOOKSHELF = "bookshelf"
     const val BOOK_DETAIL = "book/{bookId}"
     const val CHAPTER_READER = "book/{bookId}/chapter/{chapterNum}"
+    const val CHAPTER_EDIT = "book/{bookId}/chapter/{chapterNum}/edit"
     const val BOOK_CHAT = "book/{bookId}/chat"
     fun bookDetail(bookId: String) = "book/$bookId"
     fun chapterReader(bookId: String, chapterNum: Int) = "book/$bookId/chapter/$chapterNum"
@@ -633,8 +634,24 @@ fun AppNavigation(
                 initialChapterNum = chapterNum,
                 onBack = { navController.safePopBackStack() },
                 onEditChapter = { num ->
-                    navController.safeNavigate(Routes.bookChat(bookId))
+                    navController.safeNavigate(Routes.chapterEdit(bookId, num))
                 },
+            )
+        }
+
+        composable(
+            route = Routes.CHAPTER_EDIT,
+            arguments = listOf(
+                navArgument("bookId") { type = NavType.StringType },
+                navArgument("chapterNum") { type = NavType.IntType },
+            ),
+        ) { backStackEntry ->
+            val bookId = backStackEntry.arguments?.getString("bookId") ?: return@composable
+            val chapterNum = backStackEntry.arguments?.getInt("chapterNum") ?: 1
+            com.openminis.app.ui.bookshelf.ChapterEditScreen(
+                bookId = bookId,
+                chapterNum = chapterNum,
+                onBack = { navController.safePopBackStack() },
             )
         }
 

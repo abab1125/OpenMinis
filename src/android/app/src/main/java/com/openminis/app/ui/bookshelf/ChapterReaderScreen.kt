@@ -3,6 +3,8 @@ package com.openminis.app.ui.bookshelf
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -24,6 +26,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.DisposableEffect
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -45,7 +52,23 @@ fun ChapterReaderScreen(
     onEditChapter: (Int) -> Unit,
 ) {
     val context = LocalContext.current
-    val chapters by remember(bookId) { mutableStateOf(BookRepository.listChapters(bookId, context)) }
+    var chapters by remember(bookId) { mutableStateOf(BookRepository.listChapters(bookId, context)) }
+
+    // Refresh the chapter list + each body when returning from the editor
+    // (ON_RESUME), so edits saved in ChapterEditScreen show up immediately
+    // instead of being stale behind the remember() cache.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var resumeTick by remember { mutableStateOf(0) }
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) resumeTick++
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+    LaunchedEffect(bookId, resumeTick) {
+        chapters = BookRepository.listChapters(bookId, context)
+    }
 
     val initialPage = chapters.indexOfFirst { it.num == initialChapterNum }.coerceAtLeast(0)
 
@@ -110,10 +133,15 @@ fun ChapterReaderScreen(
         ) { page ->
             val ch = chapters[page]
             var content by remember(ch.num) { mutableStateOf(BookRepository.readChapter(bookId, ch.num, context) ?: "") }
+            // Re-read the body on resume so saved edits appear at once.
+            LaunchedEffect(ch.num, resumeTick) {
+                content = BookRepository.readChapter(bookId, ch.num, context) ?: ""
+            }
 
             Column(
                 modifier = Modifier
                     .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
                     .padding(horizontal = 16.dp),
             ) {
                 // Chapter word count
@@ -124,10 +152,14 @@ fun ChapterReaderScreen(
                 )
                 Spacer(Modifier.height(8.dp))
 
-                // Body text rendered via OpenMinis's MarkdownText
+                // Body text rendered via OpenMinis's MarkdownText. Use
+                // fillMaxWidth (not fillMaxSize) so the body grows to its
+                // full content height and the outer verticalScroll can
+                // actually scroll it — fillMaxSize would clamp the body to
+                // the viewport and clip everything past the first screen.
                 MarkdownText(
                     markdown = content,
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier.fillMaxWidth(),
                 )
             }
         }
