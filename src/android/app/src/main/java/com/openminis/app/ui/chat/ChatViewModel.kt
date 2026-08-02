@@ -8817,6 +8817,16 @@ Plan mode (multi-step tasks):
                         append("3. book_write_chapter → create new content\n")
                         append("4. book_read_chapter → verify continuity\n")
                         append("5. book_load_skill(\"novel-writing\") → load novel-writing methodology\n")
+                        append("\n")
+                        // [T-lingxi-replication] Knowledge index layer (lingxi-style):
+                        // description-only index; full bodies load on demand via
+                        // book_reference(type, op=read, name). Keeps the prompt small.
+                        val knowledgeIndex =
+                            com.openminis.app.data.KnowledgeIndexManager.getIndexText(activeBookId, context)
+                        if (knowledgeIndex.isNotBlank()) {
+                            append(knowledgeIndex)
+                            append("\n")
+                        }
                     }
                 } catch (_: Exception) {
                     // Book context injection failed silently
