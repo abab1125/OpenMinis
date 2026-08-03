@@ -100,7 +100,7 @@ jobs:
               echo "storePassword=$STORE_PASSWORD"
               echo "keyAlias=$KEY_ALIAS"
               echo "keyPassword=$KEY_PASSWORD"
-            } > src/android/app/keystore.properties
+            } > app/keystore.properties
             echo "Restored release keystore"
           else
             echo "::error::RELEASE_KEYSTORE_BASE64 secret not configured. APK will not be installable over previous versions."
