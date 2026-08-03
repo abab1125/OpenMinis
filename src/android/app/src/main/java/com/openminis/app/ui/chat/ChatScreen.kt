@@ -1,5 +1,6 @@
 package com.openminis.app.ui.chat
 
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
@@ -134,11 +135,14 @@ import androidx.compose.material.icons.filled.RadioButtonChecked
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Switch
 import com.openminis.app.BuildConfig
 import com.openminis.app.R
 import com.openminis.app.data.FileMentionIndex
+import com.openminis.app.data.KnowledgeIndexManager
 import com.openminis.app.logging.AppLogger
 import com.openminis.app.ui.components.MinisAlertDialog
 import com.openminis.app.ui.components.MinisMenu
@@ -396,6 +400,9 @@ fun ChatScreen(
      *  Hermes-backend draft session and navigates to it, same funnel as the
      *  session list's New Hermes button. */
     onNewHermesSession: () -> Unit = {},
+    /** [T-lingxi-replication] "选择人设" from the chat "..." menu (book sessions
+     *  only) — caller shows a persona picker and persists the chosen id. */
+    onSetPersona: (String) -> Unit = {},
     onOpenTerminal: () -> Unit = {},
     /** Open the in-app terminal with [command] pre-filled at the prompt
      *  (no trailing newline — the user reviews and presses Enter manually).
@@ -435,6 +442,8 @@ fun ChatScreen(
             mcpRepository = mcpRepository,
         ),
     )
+    var showContextSheet by remember { mutableStateOf(false) }
+    var bookContextCost by remember { mutableStateOf<ChatViewModel.BookContextCost?>(null) }
     // [T-android-larky-longsession-followup] Consume the tail-windowed
     // view instead of the canonical full list. For sessions with ≤300
     // messages this is the SAME reference (zero overhead); for longer
@@ -693,6 +702,7 @@ fun ChatScreen(
     var showThinkingLevelSheet by remember { mutableStateOf(false) }
     var showAttachMenu by remember { mutableStateOf(false) }
     var showChatMenu by remember { mutableStateOf(false) }
+    var showPersonaDialog by remember { mutableStateOf(false) }
     var showSkillsSheet by remember { mutableStateOf(false) }
     // [T-mcp-integration-android] MCPs-in-Session sheet visibility.
     var showMcpsSheet by remember { mutableStateOf(false) }
@@ -2289,6 +2299,20 @@ fun ChatScreen(
                             }
                         }
                     }
+                    // [T-lingxi-replication] Phase 4: context-cost inspector (book sessions only)
+                    if (!viewModel.isHermesBackend && viewModel.activeBookId.value != null) {
+                        IconButton(onClick = {
+                            val bid = viewModel.activeBookId.value
+                            if (bid != null) {
+                                coroutineScope.launch {
+                                    bookContextCost = viewModel.computeBookContextCost(bid)
+                                    showContextSheet = true
+                                }
+                            }
+                        }) {
+                            Icon(Icons.Default.Info, contentDescription = "上下文概览")
+                        }
+                    }
                     // iOS: "..." circle button -> dropdown menu
                     Box {
                         IconButton(onClick = { showChatMenu = true }) {
@@ -2334,7 +2358,19 @@ fun ChatScreen(
                                     Icon(Icons.Outlined.Public, contentDescription = null)
                                 },
                             )
-                            MinisMenuDivider()
+                            if (bookId != null) {
+                                DropdownMenuItem(
+                                    text = { Text("选择人设") },
+                                    onClick = {
+                                        showChatMenu = false
+                                        showPersonaDialog = true
+                                    },
+                                    leadingIcon = {
+                                        Icon(Icons.Outlined.Person, contentDescription = null)
+                                    },
+                                )
+                                MinisMenuDivider()
+                            }
                             // Clear Chat (iOS parity, red)
                             DropdownMenuItem(
                                 text = { Text(stringResource(R.string.chat_menu_clear_chat), color = MaterialTheme.colorScheme.error) },
@@ -5650,6 +5686,31 @@ fun ChatScreen(
                     },
                 )
             }
+            // [T-lingxi-replication] Persona picker for book sessions.
+            if (showPersonaDialog) {
+                val personas = com.openminis.app.data.AgentPersonas.list()
+                AlertDialog(
+                    onDismissRequest = { showPersonaDialog = false },
+                    title = { Text("选择创作人设") },
+                    text = {
+                        Column {
+                            personas.forEach { p ->
+                                TextButton(onClick = {
+                                    onSetPersona(p.id)
+                                    showPersonaDialog = false
+                                }) {
+                                    Text(p.name)
+                                }
+                            }
+                        }
+                    },
+                    confirmButton = {
+                        TextButton(onClick = { showPersonaDialog = false }) {
+                            Text("取消")
+                        }
+                    },
+                )
+            }
         }
         // Top gradient fade: messages fade into the Scaffold background.
         Box(
@@ -5935,6 +5996,17 @@ fun ChatScreen(
             onDismiss = { webAppSheetTarget = null },
         )
     }
+    // [T-lingxi-replication] Phase 4: book-context inspector sheet (cost +
+    // knowledge-index view). Hosted at screen level so it can outlive the
+    // TopAppBar Info button that triggered it.
+    if (showContextSheet) {
+        BookContextSheet(
+            cost = bookContextCost,
+            bookId = viewModel.activeBookId.value,
+            context = context,
+            onDismiss = { showContextSheet = false },
+        )
+    }
     } // CompositionLocalProvider
 }
 
@@ -6213,5 +6285,129 @@ internal fun PlanCard(items: List<FlatChatItem.PlanItem>) {
                 }
             }
         }
+    }
+}
+
+// [T-lingxi-replication] Phase 4: book-context inspector. Shows the estimated
+// context cost (system prompt / loaded references / history) and the
+// knowledge-index map (which entries are description-only vs body-loaded).
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun BookContextSheet(
+    cost: ChatViewModel.BookContextCost?,
+    bookId: String?,
+    context: Context,
+    onDismiss: () -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var indexEntries by remember { mutableStateOf<List<KnowledgeIndexManager.KnowledgeIndexEntry>>(emptyList()) }
+    var loadedKeys by remember { mutableStateOf<Set<String>>(emptySet()) }
+    LaunchedEffect(bookId) {
+        if (bookId != null) {
+            withContext(Dispatchers.IO) {
+                val entries = KnowledgeIndexManager.buildIndex(bookId, context)
+                val loaded = KnowledgeIndexManager.getLoadedEntries(bookId)
+                withContext(Dispatchers.Main) {
+                    indexEntries = entries
+                    loadedKeys = loaded
+                }
+            }
+        }
+    }
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+    ) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp)) {
+            Text("上下文概览", style = MaterialTheme.typography.titleLarge)
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "估算 token 数（CJK≈1.6 字/token，非 CJK≈4 字/token）",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(12.dp))
+
+            if (cost != null) {
+                ContextCostRow("系统提示", cost.systemPromptChars, cost.systemPromptTokens)
+                ContextCostRow("已加载引用正文", cost.loadedRefChars, cost.loadedRefTokens)
+                ContextCostRow("对话历史", cost.historyChars, cost.historyTokens)
+                val totalTokens = cost.systemPromptTokens + cost.loadedRefTokens + cost.historyTokens
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "合计约 $totalTokens tokens",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                Spacer(Modifier.height(12.dp))
+            }
+
+            val loadedCount = cost?.indexLoaded ?: loadedKeys.size
+            Text(
+                "知识点索引（${indexEntries.size} 条，已加载正文 $loadedCount/${indexEntries.size}）",
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Spacer(Modifier.height(6.dp))
+            if (indexEntries.isEmpty()) {
+                Text(
+                    "本书暂无 reference 条目",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                LazyColumn(Modifier.fillMaxWidth().heightIn(max = 320.dp)) {
+                    items(indexEntries) { e ->
+                        val loaded = loadedKeys.contains("${e.type}#${e.name}")
+                        Row(
+                            Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(
+                                if (loaded) Icons.Default.CheckCircle else Icons.Default.RadioButtonUnchecked,
+                                contentDescription = null,
+                                tint = if (loaded) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(16.dp),
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(e.name, style = MaterialTheme.typography.bodyMedium)
+                                Text(
+                                    "[${e.type}] ${e.description}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                            if (loaded) {
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    "已加载",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            Spacer(Modifier.height(16.dp))
+        }
+    }
+}
+
+@Composable
+private fun ContextCostRow(label: String, chars: Int, tokens: Int) {
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 3.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Text(label, style = MaterialTheme.typography.bodyMedium)
+        Text(
+            "$chars 字 · ~$tokens tok",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }

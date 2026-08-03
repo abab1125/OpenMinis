@@ -661,6 +661,7 @@ fun AppNavigation(
             arguments = listOf(navArgument("bookId") { type = NavType.StringType }),
         ) { backStackEntry ->
             val bookId = backStackEntry.arguments?.getString("bookId") ?: return@composable
+            val context = androidx.compose.ui.platform.LocalContext.current
             // Reuse ChatScreen with bookId — the ViewModel factory is extended
             // to create or find a book-bound session.
             ChatScreen(
@@ -688,6 +689,10 @@ fun AppNavigation(
                         popUpTo(Routes.SESSION_LIST) { inclusive = false }
                         launchSingleTop = true
                     }
+                },
+                // [T-lingxi-replication] persist chosen agent persona onto book.json
+                onSetPersona = { id ->
+                    com.openminis.app.data.repository.BookRepository.setPersona(bookId, id, context)
                 },
                 onOpenTerminal = {
                     navController.safeNavigate(Routes.terminal())

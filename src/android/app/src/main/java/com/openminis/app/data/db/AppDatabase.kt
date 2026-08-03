@@ -14,14 +14,16 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         CompactMarkerEntity::class,
         WebAppShortcutEntity::class,
         BookSourceEntity::class,
+        WorkRuleEntity::class,
     ],
-    version = 12,
+    version = 13,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun chatDao(): ChatDao
     abstract fun webAppShortcutDao(): WebAppShortcutDao
     abstract fun bookSourceDao(): BookSourceDao
+    abstract fun workRuleDao(): WorkRuleDao
 
     companion object {
         @Volatile
@@ -207,6 +209,27 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * Work rules: a new `work_rules` table backs the lingxi-style
+         * agent-instructions (user-defined writing rules per book). Pure
+         * additive — no existing entity is touched.
+         */
+        val MIGRATION_12_13 = object : Migration(12, 13) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS work_rules (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        book_id TEXT NOT NULL,
+                        content TEXT NOT NULL,
+                        sort INTEGER NOT NULL DEFAULT 0
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_work_rules_book_id ON work_rules(book_id)")
+            }
+        }
+
         val MIGRATION_3_4 = object : Migration(3, 4) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 // sessions: add iOS-parity columns
@@ -244,7 +267,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "minis.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13)
                     .build()
                     .also { INSTANCE = it }
             }

@@ -19,6 +19,22 @@ import com.openminis.app.data.repository.BookRepository
 object KnowledgeIndexManager {
     private val TYPES = listOf("characters", "worldview", "notes")
 
+    // [T-lingxi-replication] Tracks which entries had their FULL body loaded
+    // on demand (book_reference read / loadContent). The context inspector UI
+    // uses this to mark entries as "body loaded" vs "description only".
+    // Keyed by "type#name" per book.
+    private val loadedEntries = mutableMapOf<String, MutableSet<String>>()
+
+    fun markLoaded(bookId: String, type: String, name: String) {
+        loadedEntries.getOrPut(bookId) { mutableSetOf() }.add("$type#$name")
+    }
+
+    fun getLoadedEntries(bookId: String): Set<String> = loadedEntries[bookId] ?: emptySet()
+
+    fun clearLoaded(bookId: String) {
+        loadedEntries.remove(bookId)
+    }
+
     data class KnowledgeIndexEntry(
         val name: String,
         val description: String,
@@ -70,7 +86,9 @@ object KnowledgeIndexManager {
         name: String,
         context: Context,
     ): String? = try {
-        BookRepository.readReference(bookId, type, name, context)
+        val body = BookRepository.readReference(bookId, type, name, context)
+        if (body != null) markLoaded(bookId, type, name)
+        body
     } catch (_: Exception) {
         null
     }
@@ -86,5 +104,20 @@ object KnowledgeIndexManager {
             .firstOrNull { it.isNotBlank() } ?: ""
         val clean = firstParagraph.replace(Regex("\\s+"), " ").take(maxLen)
         return if (clean.length >= maxLen) "$clean…" else clean
+    }
+
+    /**
+     * Rough token estimate for mixed CJK / Latin text. CJK characters are
+     * ~1.6 chars/token; non-CJK (words/punctuation) ~4 chars/token. Good
+     * enough for a UI cost estimate — not an exact tokenizer count.
+     */
+    fun estimateTokens(text: String): Int {
+        if (text.isEmpty()) return 0
+        var cjk = 0
+        for (c in text) {
+            if (c in '\u4e00'..'\u9fff' || c in '\u3400'..'\u4dbf' || c.isHighSurrogate()) cjk++
+        }
+        val other = text.length - cjk
+        return (cjk / 1.6 + other / 4.0).toInt() + 1
     }
 }

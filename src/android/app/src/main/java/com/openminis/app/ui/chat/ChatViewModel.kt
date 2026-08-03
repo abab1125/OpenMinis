@@ -3113,6 +3113,17 @@ class ChatViewModel(
 
     init {
         loadSession()
+        // [T-lingxi-replication] Keep the work-rules cache warm whenever a book
+        // is bound (constructor seed, loadSession reconciliation, or runtime
+        // selectBook). Runs on IO so buildSystemPrompt never touches Room on
+        // its own (possibly main) thread.
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            _activeBookId.collect { id ->
+                if (id != null) runCatching {
+                    com.openminis.app.data.WorkRuleManager.refresh(id, context)
+                }
+            }
+        }
         // [T-session-paused-badge-active-false-positive] Drive the session-list
         // PAUSED badge directly off canResume — the authoritative "this session
         // is interrupted (tap Resume)" flag. This is the single chokepoint over
@@ -8827,6 +8838,21 @@ Plan mode (multi-step tasks):
                             append(knowledgeIndex)
                             append("\n")
                         }
+                        // [T-lingxi-replication] Agent persona (lingxi-style role).
+                        val persona = com.openminis.app.data.AgentPersonas.fromId(book.persona)
+                        append("\n你当前的创作人设：${persona.name}\n")
+                        append(persona.systemPrompt)
+                        append("\n")
+                        // [T-lingxi-replication] Work rules (user-defined instructions).
+                        // Reads the in-memory cache (populated on a background thread
+                        // when the book is bound / rules change) — never hits Room here.
+                        val rulesText =
+                            com.openminis.app.data.WorkRuleManager.getRulesText(activeBookId)
+                        if (rulesText.isNotBlank()) {
+                            append("\n")
+                            append(rulesText)
+                            append("\n")
+                        }
                     }
                 } catch (_: Exception) {
                     // Book context injection failed silently
@@ -8843,6 +8869,68 @@ Plan mode (multi-step tasks):
     }
 
     // ─── Legacy tool execution methods (kept for compatibility) ───────────
+
+    /**
+     * [T-lingxi-replication] Phase 4 context-cost snapshot for the
+     * book-context inspector. Computes the active book session's:
+     *  - system prompt size (chars + estimated tokens), which already includes
+     *    the injected knowledge index / persona / work rules
+     *  - loaded reference bodies (chars + tokens) — entries whose full text the
+     *    agent pulled on demand via book_reference / loadContent
+     *  - conversation history (chars + tokens)
+     *  - knowledge index: total entries vs how many had their body loaded
+     * Runs on IO because [buildSystemPrompt] re-reads reference files.
+     */
+    data class BookContextCost(
+        val systemPromptChars: Int,
+        val systemPromptTokens: Int,
+        val loadedRefChars: Int,
+        val loadedRefTokens: Int,
+        val historyChars: Int,
+        val historyTokens: Int,
+        val indexTotal: Int,
+        val indexLoaded: Int,
+    )
+
+    suspend fun computeBookContextCost(bookId: String): BookContextCost = withContext(Dispatchers.IO) {
+        val sp = buildSystemPrompt() ?: ""
+        val spChars = sp.length
+        val spTokens = com.openminis.app.data.KnowledgeIndexManager.estimateTokens(sp)
+
+        val loaded = com.openminis.app.data.KnowledgeIndexManager.getLoadedEntries(bookId)
+        var loadedChars = 0
+        var loadedTokens = 0
+        for (key in loaded) {
+            val parts = key.split("#", limit = 2)
+            if (parts.size != 2) continue
+            val body = com.openminis.app.data.KnowledgeIndexManager.loadContent(bookId, parts[0], parts[1], context)
+            if (body != null) {
+                loadedChars += body.length
+                loadedTokens += com.openminis.app.data.KnowledgeIndexManager.estimateTokens(body)
+            }
+        }
+
+        val msgs = _messages.value
+        val historyText = msgs.joinToString("\n") { it.content }
+        val historyChars = historyText.length
+        val historyTokens = com.openminis.app.data.KnowledgeIndexManager.estimateTokens(historyText)
+
+        val indexEntries = com.openminis.app.data.KnowledgeIndexManager.buildIndex(bookId, context)
+        val indexKeys = indexEntries.map { "${it.type}#${it.name}" }.toSet()
+        val indexTotal = indexEntries.size
+        val indexLoaded = loaded.intersect(indexKeys).size
+
+        BookContextCost(
+            systemPromptChars = spChars,
+            systemPromptTokens = spTokens,
+            loadedRefChars = loadedChars,
+            loadedRefTokens = loadedTokens,
+            historyChars = historyChars,
+            historyTokens = historyTokens,
+            indexTotal = indexTotal,
+            indexLoaded = indexLoaded,
+        )
+    }
 
     fun executeMemoryWrite(argsJson: String): MemoryTools.ToolResult {
         val repo = memoryRepository ?: return MemoryTools.ToolResult("Error: Memory not available", false)

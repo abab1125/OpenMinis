@@ -43,6 +43,7 @@ object BookRepository {
         val createdAt: Long,
         val updatedAt: Long,
         val kind: String = "",       // "source-cache" for books pulled from a remote book source
+        val persona: String = "general", // lingxi-style agent persona id
     )
 
     data class BookChapter(
@@ -80,6 +81,7 @@ object BookRepository {
                 createdAt = json.optLong("createdAt", jsonFile.lastModified()),
                 updatedAt = jsonFile.lastModified(),
                 kind = json.optString("kind", ""),
+                persona = json.optString("persona", "general"),
             )
         } catch (_: Exception) {
             null
@@ -465,6 +467,19 @@ object BookRepository {
     private fun resolveHostDir(bookId: String, context: Context): File? {
         val linuxPath = "$BOOKS_DIR/$bookId"
         return PRootKernel.resolveSessionHostPath("", linuxPath, context)
+    }
+
+    /** Persist the selected agent persona id onto book.json (per-book). */
+    fun setPersona(bookId: String, persona: String, context: Context) {
+        val jsonFile = resolveHostFile(bookId, "book.json", context) ?: return
+        if (!jsonFile.exists()) return
+        try {
+            val json = JSONObject(jsonFile.readText())
+            json.put("persona", persona)
+            jsonFile.writeText(json.toString(2))
+        } catch (_: Exception) {
+            // best-effort
+        }
     }
 
     private fun chapterFile(bookId: String, num: Int, context: Context): File? {

@@ -3,6 +3,9 @@ package com.openminis.app.tools
 import android.content.Context
 import java.io.File
 import java.time.Instant
+import com.openminis.app.data.AgentPersonas
+import com.openminis.app.data.KnowledgeIndexManager
+import com.openminis.app.data.WorkRuleManager
 import com.openminis.app.data.model.AgentToolDefinition
 import com.openminis.app.data.model.AgentToolParam
 import com.openminis.app.data.repository.BookRepository
@@ -41,6 +44,9 @@ object BookTools {
             add(exportDefinition())
             add(batchEditChapterDefinition())
             add(undoDefinition())
+            add(bookSetRuleDefinition())
+            add(bookListRulesDefinition())
+            add(bookDeleteRuleDefinition())
         }
     }
 
@@ -76,6 +82,9 @@ object BookTools {
             "book_export" -> exportBook(bookId, context)
             "book_batch_edit_chapter" -> batchEditChapter(bookId, argsJson, context)
             "book_undo" -> undoLastBatch(bookId, context)
+            "book_set_rule" -> setRule(bookId, argsJson, context)
+            "book_list_rules" -> listRules(bookId, context)
+            "book_delete_rule" -> deleteRule(bookId, argsJson, context)
             else -> null  // not a book tool — caller handles
         }
     }
@@ -198,12 +207,43 @@ object BookTools {
         propertyOrdering = listOf("tool_title", "type", "op", "name", "content"),
     )
 
+    private fun bookSetRuleDefinition() = AgentToolDefinition(
+        name = "book_set_rule",
+        description = "Add a work rule (用户自定义写作指令) to the current book. Rules are injected into the system prompt so the agent follows them. Max 20 rules, each ≤ 5000 chars.",
+        parameters = mapOf(
+            "tool_title" to toolTitle("set_rule"),
+            "content" to AgentToolParam("string", "The rule text, e.g. '所有对话必须用口语化短句' or '反派不能无故洗白'. Markdown ok."),
+        ),
+        required = listOf("tool_title", "content"),
+        propertyOrdering = listOf("tool_title", "content"),
+    )
+
+    private fun bookListRulesDefinition() = AgentToolDefinition(
+        name = "book_list_rules",
+        description = "List all work rules of the current book (user-defined writing instructions).",
+        parameters = mapOf("tool_title" to toolTitle("list_rules")),
+        required = listOf("tool_title"),
+        propertyOrdering = listOf("tool_title"),
+    )
+
+    private fun bookDeleteRuleDefinition() = AgentToolDefinition(
+        name = "book_delete_rule",
+        description = "Delete a work rule of the current book by its id (obtain ids from book_list_rules).",
+        parameters = mapOf(
+            "tool_title" to toolTitle("delete_rule"),
+            "rule_id" to AgentToolParam("string", "The rule id returned by book_list_rules."),
+        ),
+        required = listOf("tool_title", "rule_id"),
+        propertyOrdering = listOf("tool_title", "rule_id"),
+    )
+
     private fun buildContextDefinition() = AgentToolDefinition(
         name = "book_get_context",
-        description = "Build a structured writing context for a target chapter. " +
-            "Returns: current chapter body, up to 9 previous chapters (full text), chapter list. " +
-            "Call this before writing a new chapter to get everything you need in a single response. " +
-            "Saves multiple file_read calls.",
+        description = "Build a complete writing context for a target chapter, mirroring lingxi's " +
+            "context order: 创作人设 → 知识点索引(仅描述) → 作品信息(梗概/大纲) → 作品规则 → 章节上下文. " +
+            "Returns the full assembled block in one response so you can write or revise the chapter " +
+            "with all needed context at hand. Call this before writing a new chapter. " +
+            "Conversation history is already supplied by the system automatically.",
         parameters = mapOf(
             "tool_title" to toolTitle("get_context"),
             "chapter_num" to AgentToolParam("integer", "Target chapter number to build context around (default: latest written + 1)"),
@@ -353,7 +393,10 @@ object BookTools {
                 if (name.isBlank()) return ToolExecutionResult("Error: 'name' required for read", false)
                 val text = BookRepository.readReference(bookId, type, name, context)
                 if (text == null) ToolExecutionResult("Error: $type/$name.md not found", false)
-                else ToolExecutionResult("--- $type/$name ---\n$text", true)
+                else {
+                    com.openminis.app.data.KnowledgeIndexManager.markLoaded(bookId, type, name)
+                    ToolExecutionResult("--- $type/$name ---\n$text", true)
+                }
             }
             "write" -> {
                 if (name.isBlank()) return ToolExecutionResult("Error: 'name' required for write", false)
@@ -370,15 +413,110 @@ object BookTools {
         }
     }
 
-    private fun buildContext(bookId: String, argsJson: String, context: Context): ToolExecutionResult {
+    private suspend fun setRule(bookId: String, argsJson: String, context: Context): ToolExecutionResult {
+        val args = JSONObject(argsJson)
+        val content = args.optString("content", "")
+        if (content.isBlank()) return ToolExecutionResult("Error: 'content' is required", false)
+        val id = com.openminis.app.data.WorkRuleManager.addRule(bookId, content, context)
+            ?: return ToolExecutionResult("Error: rule limit reached (max 20) or content empty", false)
+        ToolExecutionResult("Added rule $id. Rules are now injected into the book system prompt.", true)
+    }
+
+    private suspend fun listRules(bookId: String, context: Context): ToolExecutionResult {
+        com.openminis.app.data.WorkRuleManager.refresh(bookId, context)
+        val text = com.openminis.app.data.WorkRuleManager.getRulesText(bookId)
+        if (text.isBlank()) return ToolExecutionResult("No work rules yet.", true)
+        ToolExecutionResult(text, true)
+    }
+
+    private suspend fun deleteRule(bookId: String, argsJson: String, context: Context): ToolExecutionResult {
+        val args = JSONObject(argsJson)
+        val id = args.optString("rule_id", "")
+        if (id.isBlank()) return ToolExecutionResult("Error: 'rule_id' is required", false)
+        com.openminis.app.data.WorkRuleManager.deleteRule(bookId, id, context)
+        ToolExecutionResult("Deleted rule $id.", true)
+    }
+
+    private suspend fun buildContext(bookId: String, argsJson: String, context: Context): ToolExecutionResult {
         val args = JSONObject(argsJson)
         val chapterNum = args.optInt("chapter_num", -1)
         val num = if (chapterNum > 0) chapterNum else {
             val chapters = BookRepository.listChapters(bookId, context)
             if (chapters.isEmpty()) 1 else chapters.last().num + 1
         }
-        val ctx = BookRepository.buildContext(bookId, num, context = context)
-        return ToolExecutionResult(ctx, true)
+        val text = assembleBookContext(bookId, num, context, isSource = false)
+        return ToolExecutionResult(text, true)
+    }
+
+    /**
+     * [T-lingxi-replication] Stage-3 context assembler. Mirrors lingxi's request
+     * context order: persona -> knowledge index -> work info (synopsis/outline/
+     * settings) -> work rules -> chapter block.
+     *
+     * Conversation history is supplied by the chat framework automatically (the
+     * message list is part of every request), so it is intentionally NOT
+     * duplicated here — re-injecting it would only waste tokens.
+     */
+    private suspend fun assembleBookContext(
+        bookId: String,
+        num: Int,
+        context: Context,
+        isSource: Boolean,
+    ): String {
+        val sb = StringBuilder()
+        val book = BookRepository.loadBook(bookId, context)
+        val persona = AgentPersonas.fromId(book?.persona)
+
+        // 1) Persona (agent role)
+        sb.appendLine("=== 创作人设 ===")
+        sb.appendLine("你当前的创作人设：${persona.name}")
+        sb.appendLine(persona.systemPrompt)
+        sb.appendLine()
+
+        // 2) Knowledge index (description-only; bodies load on demand)
+        if (!isSource) {
+            val idx = KnowledgeIndexManager.getIndexText(bookId, context)
+            if (idx.isNotBlank()) {
+                sb.appendLine(idx)
+                sb.appendLine()
+            }
+        }
+
+        // 3) Work info: synopsis + genre/status + outline (settings fold into the index)
+        sb.appendLine("=== 作品信息 ===")
+        sb.appendLine("书名：${book?.title ?: "?"}    类型：${book?.genre ?: ""}    状态：${book?.status ?: ""}")
+        if (book != null && book.synopsis.isNotBlank()) {
+            sb.appendLine("梗概：${book.synopsis}")
+        }
+        if (!isSource) {
+            val outline = BookRepository.readOutline(bookId, context)
+            if (outline.isNotBlank()) {
+                sb.appendLine()
+                sb.appendLine("--- 大纲 ---")
+                sb.appendLine(outline)
+            }
+        }
+        sb.appendLine()
+
+        // 4) Work rules (user-defined instructions)
+        WorkRuleManager.refresh(bookId, context)
+        val rules = WorkRuleManager.getRulesText(bookId)
+        if (rules.isNotBlank()) {
+            sb.appendLine(rules)
+            sb.appendLine()
+        }
+
+        // 5) Chapter block (current + recent prior chapters + chapter list)
+        sb.appendLine("=== 章节写作上下文（围绕 ch${"%03d".format(num)}）===")
+        if (isSource) {
+            sb.append(buildSourceChapterBlock(bookId, num, context))
+        } else {
+            sb.append(BookRepository.buildContext(bookId, num, context = context))
+        }
+
+        sb.appendLine()
+        sb.appendLine("注：以上为作品与章节上下文。完整对话历史由系统按消息顺序自动提供，无需在此重复。")
+        return sb.toString().trimEnd()
     }
 
     private fun search(bookId: String, argsJson: String, context: Context): ToolExecutionResult {
@@ -484,6 +622,12 @@ object BookTools {
         val chapterNum = args.optInt("chapter_num", -1)
         val chapters = BookSourceRepository.listSourceChapters(bookId, context)
         val num = if (chapterNum > 0) chapterNum else (chapters.lastOrNull()?.num ?: 1)
+        val text = assembleBookContext(bookId, num, context, isSource = true)
+        return ToolExecutionResult(text, true)
+    }
+
+    /** Source-book chapter block (bodies live remotely, fetched lazily). */
+    private suspend fun buildSourceChapterBlock(bookId: String, num: Int, context: Context): String {
         val sb = StringBuilder()
         val current = BookSourceRepository.readSourceChapter(bookId, num, context) ?: ""
         sb.appendLine("=== Current Chapter (ch${"%03d".format(num)}) ===")
@@ -499,11 +643,11 @@ object BookTools {
             }
         }
         sb.appendLine()
-        sb.appendLine("=== Chapter List (${chapters.size} chapters, cached ${chapters.count { it.cached }}) ===")
-        chapters.forEach { c ->
+        sb.appendLine("=== Chapter List (cached chapters only) ===")
+        BookSourceRepository.listSourceChapters(bookId, context).forEach { c ->
             sb.appendLine("ch${"%03d".format(c.num)}: ${c.title}${if (c.cached) "" else " [未缓存]"}")
         }
-        return ToolExecutionResult(sb.toString().trimEnd(), true)
+        return sb.toString().trimEnd()
     }
 
     private suspend fun exportBook(bookId: String, context: Context): ToolExecutionResult = withContext(Dispatchers.IO) {
