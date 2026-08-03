@@ -128,7 +128,9 @@ class RootfsManager private constructor(private val context: Context) {
             // T219-6: also pre-create `mounts/` so PRoot's `-b host:/var/minis/mounts/<name>`
             // has the parent directory to bind into; without this, PRoot silently
             // skips bind mounts whose target path doesn't exist.
-            val minisSubdirs = listOf("attachments", "offloads", "workspace", "skills", "memory", "shared", "mounts")
+            // books: BookRepository stores novel projects here; pre-create so
+            // resolveSessionHostPath finds a real dir even before first import.
+            val minisSubdirs = listOf("attachments", "offloads", "workspace", "skills", "memory", "shared", "mounts", "books")
             for (subdir in minisSubdirs) {
                 File(rootfsDir, "var/minis/$subdir").mkdirs()
             }

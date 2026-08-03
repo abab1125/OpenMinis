@@ -242,12 +242,17 @@ object BookRepository {
 
         val bookId = "import_${System.currentTimeMillis()}"
         createBook(bookId, title, "imported", "Imported from $sourcePath.", context)
+        val hostRoot = resolveHostDir(bookId, context)
+        if (hostRoot == null || !hostRoot.isDirectory) return null
+        var written = 0
         chapters.forEachIndexed { idx, ch ->
             val num = idx + 1
             val f = chapterFile(bookId, num, context) ?: return@forEachIndexed
             f.writeText("# ${ch.title}\n\n${ch.content}")
+            written++
             progress?.invoke(idx + 1, chapters.size)
         }
+        if (written == 0) return null
         refreshBookMeta(bookId, context)
         return bookId
     }
@@ -295,19 +300,27 @@ object BookRepository {
         // Create the book skeleton (directories, book.json, outline, git).
         createBook(bookId, title, "imported", "Imported from TXT.", context)
 
+        // Verify the book directory was actually created - createBook silently
+        // returns if resolveHostDir fails (e.g. rootfs not yet booted), and we
+        // must not report success if nothing was written.
+        val hostRoot = resolveHostDir(bookId, context)
+        if (hostRoot == null || !hostRoot.isDirectory) return null
+
         // Write each chapter. Match the existing ch{NNN}.md convention and
         // the "# Title" heading that listChapters / writeChapter expect.
+        var written = 0
         chapters.forEachIndexed { idx, ch ->
             val num = idx + 1
             val f = chapterFile(bookId, num, context) ?: return@forEachIndexed
             val heading = "# ${ch.title}\n\n"
             f.writeText(heading + ch.content)
+            written++
             progress?.invoke(idx + 1, chapters.size)
         }
+        if (written == 0) return null
         refreshBookMeta(bookId, context)
 
         // Commit to git so the imported state is recoverable.
-        val hostRoot = resolveHostDir(bookId, context)
         if (hostRoot != null) {
             try {
                 Runtime.getRuntime().exec(arrayOf("git", "add", "-A"), null, hostRoot).waitFor()

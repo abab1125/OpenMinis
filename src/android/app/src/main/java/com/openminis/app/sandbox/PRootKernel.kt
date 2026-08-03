@@ -193,7 +193,9 @@ object PRootKernel {
         // [T-mcp-integration-android] mcp-servers is global (like memory/skills):
         // binding it here makes the in-PRoot minis-mcp-cli read/write the SAME
         // servers.json the Android Settings UI does (host: minis-global/mcp-servers).
-        listOf("memory", "skills", "shared", "mcp-servers").forEach { subdir ->
+        // books is global so BookRepository (file-based novel projects) resolves
+        // /var/minis/books/... to a stable host dir even before PRoot boots.
+        listOf("memory", "skills", "shared", "mcp-servers", "books").forEach { subdir ->
             val hostDir = File(globalBase, subdir).also { it.mkdirs() }
             bindMounts["/var/minis/$subdir"] = hostDir.absolutePath
         }

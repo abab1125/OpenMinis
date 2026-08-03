@@ -45,6 +45,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -525,10 +526,13 @@ private fun NewBookDialog(
 }
 
 /**
- * Import-from-TXT dialog. Lets the user set a book title, pick a chapter-split
- * rule (from [TxtTocRules.presets]) and a text encoding, then confirms. The
- * actual file read + split runs off the UI thread by the caller (see
- * [BookshelfScreen]'s onConfirm handler).
+ * Import-from-TXT dialog. Pre-reads the file to show a live preview
+ * (detected encoding, chapter count, total word count) so the user
+ * knows the import will succeed before committing. Mirrors legado's
+ * ImportBookActivity which shows chapter/word stats per file.
+ *
+ * The actual full-file split + write runs off the UI thread by the
+ * caller (see [BookshelfScreen]'s onConfirm handler).
  */
 @Composable
 private fun ImportBookDialog(
@@ -536,13 +540,26 @@ private fun ImportBookDialog(
     onDismiss: () -> Unit,
     onConfirm: (title: String, ruleIndex: Int, charset: Charset?) -> Unit,
 ) {
+    val context = LocalContext.current
     var title by remember { mutableStateOf("") }
-    // -1 = 智能识别（自动挑选最匹配的分章规则）— the recommended default.
+    // -1 = 智能识别（自动挑选最匹配的分章规则）- the recommended default.
     var ruleIndex by remember { mutableStateOf(-1) }
-    // -1 = 自动检测编码（UTF-8/GBK 嗅探）— the recommended default.
+    // -1 = 自动检测编码（UTF-8/GBK 嗅探）- the recommended default.
     var charsetIndex by remember { mutableStateOf(-1) }
     var rulesExpanded by remember { mutableStateOf(false) }
     var charsetExpanded by remember { mutableStateOf(false) }
+
+    // Preview state: populated by a background pre-read of the file.
+    data class ImportPreview(
+        val chapterCount: Int,
+        val wordCount: Int,
+        val detectedCharset: String,
+        val detectedRule: String,
+        val firstChapters: List<String>,
+    )
+    var preview by remember { mutableStateOf<ImportPreview?>(null) }
+    var previewError by remember { mutableStateOf<String?>(null) }
+    var previewing by remember { mutableStateOf(false) }
 
     val charsets: List<Pair<java.nio.charset.Charset, String>> = listOf(
         Charsets.UTF_8 to "UTF-8",
@@ -553,6 +570,70 @@ private fun ImportBookDialog(
     val currentRuleName = if (ruleIndex < 0) "智能识别（推荐）" else TxtTocRules.presets[ruleIndex].name
     val currentCharset: Charset? = if (charsetIndex < 0) null else charsets[charsetIndex].first
     val currentCharsetName = if (charsetIndex < 0) "自动检测（推荐）" else charsets[charsetIndex].second
+
+    // Pre-read the file for preview whenever the dialog opens or the user
+    // changes the rule/encoding selection. This runs on IO so the UI stays
+    // responsive; legado does the same in ImportBookActivity.scanDoc.
+    val scope = rememberCoroutineScope()
+    LaunchedEffect(uri) {
+        // Default title from filename on first load.
+        if (title.isBlank()) {
+            title = uri.lastPathSegment?.substringAfterLast('/')?.substringBeforeLast('.') ?: "导入小说"
+        }
+    }
+    fun runPreview() {
+        previewing = true
+        previewError = null
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                try {
+                    val cs = currentCharset
+                    val regex = if (ruleIndex < 0) null else TxtTocRules.presets[ruleIndex].regex
+                    // Read the whole file for an accurate preview (most TXT
+                    // novels are a few MB; legado reads the full file too).
+                    context.contentResolver.openInputStream(uri)?.use { input ->
+                        // Read up to 512KB sample for encoding/rule detection.
+                        val sample = ByteArray(512_000).let { buf ->
+                            var off = 0
+                            while (off < buf.size) {
+                                val n = input.read(buf, off, buf.size - off)
+                                if (n <= 0) break
+                                off += n
+                            }
+                            buf.copyOf(off)
+                        }
+                        val detectedCs = cs ?: com.openminis.app.data.imports.EncodingDetector.detect(sample)
+                        val detectedRx = regex ?: run {
+                            val text = String(sample, detectedCs)
+                            com.openminis.app.data.imports.TxtTocRules.autoDetect(text)?.regex ?: ""
+                        }
+                        // Re-open and split the full file for accurate counts.
+                        context.contentResolver.openInputStream(uri)?.use { fullInput ->
+                            val chapters = com.openminis.app.data.imports.TxtChapterSplitter.split(fullInput, detectedRx, detectedCs)
+                            val words = chapters.sumOf { it.content.length }
+                            ImportPreview(
+                                chapterCount = chapters.size,
+                                wordCount = words,
+                                detectedCharset = detectedCs.name(),
+                                detectedRule = if (detectedRx.isBlank()) "按字数切分" else "正则规则",
+                                firstChapters = chapters.take(5).map { it.title },
+                            )
+                        }
+                    } ?: run {
+                        previewError = "无法读取文件（URI 权限丢失）"
+                        null
+                    }
+                } catch (e: Exception) {
+                    previewError = "读取失败：${e.message ?: "未知错误"}"
+                    null
+                }
+            }
+            preview = result
+            previewing = false
+        }
+    }
+    // Auto-run preview on open and when rule/charset changes.
+    LaunchedEffect(uri, ruleIndex, charsetIndex) { runPreview() }
 
     androidx.compose.ui.window.Dialog(
         onDismissRequest = onDismiss,
@@ -653,6 +734,72 @@ private fun ImportBookDialog(
                                     charsetExpanded = false
                                 },
                             )
+                        }
+                    }
+                }
+
+                Spacer(Modifier.height(12.dp))
+                // ── Preview: chapter count + word count + first few titles ──
+                // Mirrors legado's ImportBookActivity which shows per-file
+                // chapter/word stats so the user knows the split worked.
+                if (previewing) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(vertical = 8.dp),
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp,
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            "正在预读分章…",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                } else if (previewError != null) {
+                    Text(
+                        previewError!!,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(vertical = 8.dp),
+                    )
+                } else if (preview != null) {
+                    val p = preview!!
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Text(
+                                "共 ${p.chapterCount} 章 · 约 ${p.wordCount} 字",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            Spacer(Modifier.height(2.dp))
+                            Text(
+                                "编码：${p.detectedCharset}  |  规则：${p.detectedRule}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            if (p.firstChapters.isNotEmpty()) {
+                                Spacer(Modifier.height(6.dp))
+                                Text(
+                                    "前${p.firstChapters.size}章：",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                p.firstChapters.forEachIndexed { i, ch ->
+                                    Text(
+                                        "${i + 1}. $ch",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            }
                         }
                     }
                 }
