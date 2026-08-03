@@ -22,6 +22,17 @@ val appCustomization = Properties().apply {
 fun customizationValue(key: String): String =
     (appCustomization.getProperty(key) ?: "").replace("\"", "\\\"")
 
+// Signing: read keystore.properties (gitignored, not in repo) for the
+// release keystore path + credentials. CI generates this file from secrets;
+// local devs create it once pointing at their copy of release.keystore.
+// If the file is absent (e.g. fresh clone without signing setup), the
+// default values fall back to the standard Android debug keystore so the
+// project still compiles - but CI hard-fails if the secret is missing.
+val keystoreProperties = Properties().apply {
+    val f = rootProject.file("app/keystore.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
+
 android {
     namespace = "com.openminis.app"
     // [T-android-dynamic-island] Bumped 35→36 so the Android 16 (Baklava)
@@ -68,14 +79,26 @@ android {
         }
     }
 
+    signingConfigs {
+        create("release") {
+            storeFile = file(keystoreProperties.getProperty("storeFile", "debug.keystore"))
+            storePassword = keystoreProperties.getProperty("storePassword", "android")
+            keyAlias = keystoreProperties.getProperty("keyAlias", "androiddebugkey")
+            keyPassword = keystoreProperties.getProperty("keyPassword", "android")
+        }
+    }
+
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("release")
+        }
         release {
             isMinifyEnabled = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("release")
         }
     }
 
