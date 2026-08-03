@@ -419,14 +419,14 @@ object BookTools {
         if (content.isBlank()) return ToolExecutionResult("Error: 'content' is required", false)
         val id = com.openminis.app.data.WorkRuleManager.addRule(bookId, content, context)
             ?: return ToolExecutionResult("Error: rule limit reached (max 20) or content empty", false)
-        ToolExecutionResult("Added rule $id. Rules are now injected into the book system prompt.", true)
+        return ToolExecutionResult("Added rule $id. Rules are now injected into the book system prompt.", true)
     }
 
     private suspend fun listRules(bookId: String, context: Context): ToolExecutionResult {
         com.openminis.app.data.WorkRuleManager.refresh(bookId, context)
         val text = com.openminis.app.data.WorkRuleManager.getRulesText(bookId)
         if (text.isBlank()) return ToolExecutionResult("No work rules yet.", true)
-        ToolExecutionResult(text, true)
+        return ToolExecutionResult(text, true)
     }
 
     private suspend fun deleteRule(bookId: String, argsJson: String, context: Context): ToolExecutionResult {
@@ -434,7 +434,7 @@ object BookTools {
         val id = args.optString("rule_id", "")
         if (id.isBlank()) return ToolExecutionResult("Error: 'rule_id' is required", false)
         com.openminis.app.data.WorkRuleManager.deleteRule(bookId, id, context)
-        ToolExecutionResult("Deleted rule $id.", true)
+        return ToolExecutionResult("Deleted rule $id.", true)
     }
 
     private suspend fun buildContext(bookId: String, argsJson: String, context: Context): ToolExecutionResult {

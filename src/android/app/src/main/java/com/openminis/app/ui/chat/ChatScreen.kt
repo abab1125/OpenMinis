@@ -41,6 +41,7 @@ import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.AudioFile
 import androidx.compose.material.icons.filled.FolderZip
 import androidx.compose.material.icons.filled.MenuBook
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.VideoFile
 import androidx.compose.material.icons.automirrored.filled.Article
@@ -2366,7 +2367,7 @@ fun ChatScreen(
                                         showPersonaDialog = true
                                     },
                                     leadingIcon = {
-                                        Icon(Icons.Outlined.Person, contentDescription = null)
+                                        Icon(Icons.Filled.Person, contentDescription = null)
                                     },
                                 )
                                 MinisMenuDivider()
