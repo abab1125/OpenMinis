@@ -2230,6 +2230,11 @@ fun ChatScreen(
                     if (!viewModel.isHermesBackend) {
                         val activeBookId by viewModel.activeBookId.collectAsState()
                         var showBookPicker by remember { mutableStateOf(false) }
+                        // [T-openminis-ux] Bookshelf picker search. Empty →
+                        // recent 3 books (listBooks is updatedAt-desc);
+                        // non-empty → substring match over title/id with no
+                        // truncation. Cleared whenever the menu closes.
+                        var bookSearchQuery by remember { mutableStateOf("") }
                         // Load the bookshelf lazily only when the picker opens,
                         // so we don't touch the filesystem on every recompose.
                         val books by produceState(
@@ -2244,6 +2249,13 @@ fun ChatScreen(
                                 }
                             }
                         }
+                        val visibleBooks = remember(books, bookSearchQuery) {
+                            if (bookSearchQuery.isBlank()) books.take(3)
+                            else books.filter {
+                                it.title.contains(bookSearchQuery, ignoreCase = true) ||
+                                    it.id.contains(bookSearchQuery, ignoreCase = true)
+                            }
+                        }
                         Box {
                             IconButton(onClick = { showBookPicker = true }) {
                                 Icon(
@@ -2254,12 +2266,33 @@ fun ChatScreen(
                             }
                             DropdownMenu(
                                 expanded = showBookPicker,
-                                onDismissRequest = { showBookPicker = false },
+                                onDismissRequest = {
+                                    // [T-openminis-ux] Reset the search on
+                                    // close so reopening always shows the
+                                    // recent-3 default.
+                                    bookSearchQuery = ""
+                                    showBookPicker = false
+                                },
+                                modifier = Modifier.heightIn(max = 420.dp),
                             ) {
+                                // [T-openminis-ux] Search-as-filter: focus
+                                // brings up the keyboard, typing filters
+                                // live, and hits are not truncated to 3.
+                                OutlinedTextField(
+                                    value = bookSearchQuery,
+                                    onValueChange = { bookSearchQuery = it },
+                                    placeholder = { Text("搜索书籍…") },
+                                    singleLine = true,
+                                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 12.dp, vertical = 4.dp),
+                                )
                                 if (activeBookId != null) {
                                     DropdownMenuItem(
                                         text = { Text("Unbind book") },
                                         onClick = {
+                                            bookSearchQuery = ""
                                             showBookPicker = false
                                             viewModel.selectBook(null)
                                         },
@@ -2267,14 +2300,18 @@ fun ChatScreen(
                                     )
                                     MinisMenuDivider()
                                 }
-                                if (books.isEmpty()) {
-                                    DropdownMenuItem(
+                                when {
+                                    books.isEmpty() -> DropdownMenuItem(
                                         text = { Text("No books yet — create or import one from the Bookshelf") },
                                         onClick = { showBookPicker = false },
                                         enabled = false,
                                     )
-                                } else {
-                                    books.forEach { b ->
+                                    visibleBooks.isEmpty() -> DropdownMenuItem(
+                                        text = { Text("未找到匹配的书籍") },
+                                        onClick = { showBookPicker = false },
+                                        enabled = false,
+                                    )
+                                    else -> visibleBooks.forEach { b ->
                                         DropdownMenuItem(
                                             text = {
                                                 Column {
@@ -2286,6 +2323,7 @@ fun ChatScreen(
                                                 }
                                             },
                                             onClick = {
+                                                bookSearchQuery = ""
                                                 showBookPicker = false
                                                 viewModel.selectBook(b.id)
                                             },
