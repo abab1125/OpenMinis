@@ -3520,7 +3520,13 @@ fun ChatScreen(
                                 // follow the chat's current level.
                                 val effectiveLevel = item.messageThinkingLevel
                                     ?: viewModel.thinkingLevel.value
-                                if (effectiveLevel.isEnabled) {
+                                // [T-openminis-ux] Per-message override: tapping
+                                // the "is thinking…" placeholder while
+                                // thinking=OFF force-reveals THIS turn's
+                                // thinking block (streamed deltas keep updating
+                                // it live once the gate opens).
+                                val forceShowThinking by viewModel.forceShowThinking.collectAsState()
+                                if (effectiveLevel.isEnabled || forceShowThinking == item.messageId) {
                                     // [T-android-thinking-auto-collapse] Use
                                     // `isLastBlockOverall` (not `isLast` =
                                     // last-thinking-only) so the block flips
@@ -3602,7 +3608,12 @@ fun ChatScreen(
                                     { viewModel.revertCompact() }
                                 } else null,
                             )
-                            is FlatChatItem.AssistantTyping -> TypingIndicator()
+                            is FlatChatItem.AssistantTyping -> TypingIndicator(
+                                // [T-openminis-ux] thinking=OFF: tap the
+                                // "is thinking…" placeholder to live-reveal
+                                // this turn's streamed thinking chain.
+                                onClickThinking = { viewModel.forceShowThinking(item.messageId) },
+                            )
                             is FlatChatItem.AssistantError -> InlineErrorBanner(
                                 error = item.error,
                                 onRetry = {

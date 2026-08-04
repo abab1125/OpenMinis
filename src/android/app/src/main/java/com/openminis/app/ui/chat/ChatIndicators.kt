@@ -8,6 +8,7 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -88,7 +89,7 @@ internal fun StreamingDotsText() {
 // ─── Typing Indicator (three dots pulsing) ────────────────────────────────────
 
 @Composable
-internal fun TypingIndicator() {
+internal fun TypingIndicator(onClickThinking: (() -> Unit)? = null) {
     val infiniteTransition = rememberInfiniteTransition(label = "typing")
     // Live Soul name → "<custom name> is thinking…" when the user renamed
     // the assistant in Soul settings. SoulStore.cachedMetadata is a StateFlow
@@ -98,8 +99,13 @@ internal fun TypingIndicator() {
     val soulMeta by com.openminis.app.agent.SoulStore.cachedMetadata.collectAsState()
     val soulName = soulMeta.name.trim().ifEmpty { "Minis" }
 
+    // [T-openminis-ux] With thinking=OFF the thinking chain is streamed but
+    // hidden; making the placeholder tappable reveals it live. Null callback
+    // (the default) keeps the old inert behaviour for other call sites.
     Row(
-        modifier = Modifier.padding(top = 2.dp, bottom = 8.dp),
+        modifier = Modifier
+            .padding(top = 2.dp, bottom = 8.dp)
+            .let { if (onClickThinking != null) it.clickable(onClick = onClickThinking) else it },
         verticalAlignment = Alignment.Bottom,
     ) {
         Text(

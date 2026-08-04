@@ -1373,6 +1373,18 @@ class ChatViewModel(
     internal val _thinkingLevel = MutableStateFlow(ThinkingLevel.OFF)
     val thinkingLevel: StateFlow<ThinkingLevel> = _thinkingLevel.asStateFlow()
 
+    // [T-openminis-ux] With thinking=OFF the thinking chain is streamed into
+    // the message but gated off at render time. Tapping the "is thinking…"
+    // placeholder flips this to that turn's assistant message id so the
+    // gate opens per-message. One active turn at a time, so a plain
+    // String? suffices; cleared on the next send.
+    internal val _forceShowThinking = MutableStateFlow<String?>(null)
+    val forceShowThinking: StateFlow<String?> = _forceShowThinking.asStateFlow()
+
+    fun forceShowThinking(messageId: String) {
+        _forceShowThinking.value = messageId
+    }
+
     /**
      * [T-android-enhanced-cache] Enhanced Cache (1-hour Anthropic cache TTL)
      * toggle. Per-VM memory state, NOT persisted — mirrors iOS
@@ -5388,6 +5400,9 @@ class ChatViewModel(
         // A fresh send supersedes any pending resume — mirror iOS which clears
         // canResume at the top of send().
         _canResume.value = false
+        // [T-openminis-ux] A new turn starts with no forced thinking reveal —
+        // the tap-to-show is per-turn only.
+        _forceShowThinking.value = null
         // T185: clear the share-injected flag the moment the user actually
         // sends. Without this, the "Move to…" capsule (gated on
         // hasInjectedShareContent) keeps floating over the user-message row
